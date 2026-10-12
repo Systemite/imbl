@@ -14,12 +14,10 @@ pub(crate) const VECTOR_CHUNK_SIZE: usize = 64;
 // Must be an even number!
 #[cfg(feature = "small-chunks")]
 pub(crate) const ORD_CHUNK_SIZE: usize = 6;
-// Value of 16 chosen based on performance analysis. Larger nodes might improve lookup slightly
-// and bulk mutable operations more so, but suffers severe copy overhead for small mutations.
-// Under typical workloads (e.g. 70% lookup, 25% small mutation, 5% bulk mutation), 16 arguably
-// provides the best balance.
+// Upstream 7.0 lowered this to 16 (#144). We restore 6.x's 64: it is faster for our
+// OrdSet/OrdMap workloads (intersections, range scans, filters over large sets).
 #[cfg(not(feature = "small-chunks"))]
-pub(crate) const ORD_CHUNK_SIZE: usize = 16;
+pub(crate) const ORD_CHUNK_SIZE: usize = 64;
 
 /// The level size of HAMTs, in bits
 /// Branching factor is 2 ^ HashLevelSize.
