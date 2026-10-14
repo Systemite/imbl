@@ -28,6 +28,7 @@ use equivalent::Comparable;
 
 use super::map;
 use crate::hashset::GenericHashSet;
+use crate::nodes::btree::DEFAULT_NODE_SIZE;
 use crate::shared_ptr::DefaultSharedPtr;
 use crate::GenericOrdMap;
 
@@ -75,12 +76,15 @@ pub type OrdSet<A> = GenericOrdSet<A, DefaultSharedPtr>;
 /// ordered, so values always come out from lowest to highest, where a
 /// [`GenericHashSet`] has no guaranteed ordering.
 ///
+/// The const parameter `N` sets the node size of the underlying B+ tree. It
+/// works the same way as the node size of [`GenericOrdMap`].
+///
 /// [1]: https://en.wikipedia.org/wiki/B%2B_tree
-pub struct GenericOrdSet<A, P: SharedPointerKind> {
-    map: GenericOrdMap<A, (), P>,
+pub struct GenericOrdSet<A, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    map: GenericOrdMap<A, (), P, N>,
 }
 
-impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
+impl<A, P: SharedPointerKind, const N: usize> GenericOrdSet<A, P, N> {
     /// Construct an empty set.
     #[inline]
     #[must_use]
@@ -181,7 +185,7 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
     }
 }
 
-impl<A, P> GenericOrdSet<A, P>
+impl<A, P, const N: usize> GenericOrdSet<A, P, N>
 where
     A: Ord,
     P: SharedPointerKind,
@@ -208,7 +212,7 @@ where
 
     /// Create an iterator over the contents of the set.
     #[must_use]
-    pub fn iter(&self) -> Iter<'_, A, P> {
+    pub fn iter(&self) -> Iter<'_, A, P, N> {
         Iter {
             it: self.map.iter(),
         }
@@ -216,7 +220,7 @@ where
 
     /// Create an iterator over a range inside the set.
     #[must_use]
-    pub fn range<R, Q>(&self, range: R) -> RangedIter<'_, A, P>
+    pub fn range<R, Q>(&self, range: R) -> RangedIter<'_, A, P, N>
     where
         R: RangeBounds<Q>,
         Q: Comparable<A> + ?Sized,
@@ -238,7 +242,7 @@ where
     /// the two sets, minus the number of elements belonging to nodes
     /// shared between them)
     #[must_use]
-    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, A, P> {
+    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, A, P, N> {
         DiffIter {
             it: self.map.diff(&other.map),
         }
@@ -392,7 +396,7 @@ where
     }
 }
 
-impl<A, P> GenericOrdSet<A, P>
+impl<A, P, const N: usize> GenericOrdSet<A, P, N>
 where
     A: Ord + Clone,
     P: SharedPointerKind,
@@ -717,7 +721,7 @@ where
 
 // Core traits
 
-impl<A, P: SharedPointerKind> Clone for GenericOrdSet<A, P> {
+impl<A, P: SharedPointerKind, const N: usize> Clone for GenericOrdSet<A, P, N> {
     /// Clone a set.
     ///
     /// Time: O(1)
@@ -730,27 +734,27 @@ impl<A, P: SharedPointerKind> Clone for GenericOrdSet<A, P> {
 }
 
 // TODO: Support PartialEq for OrdSet that have different P
-impl<A: Ord, P: SharedPointerKind> PartialEq for GenericOrdSet<A, P> {
+impl<A: Ord, P: SharedPointerKind, const N: usize> PartialEq for GenericOrdSet<A, P, N> {
     fn eq(&self, other: &Self) -> bool {
         self.map.eq(&other.map)
     }
 }
 
-impl<A: Ord, P: SharedPointerKind> Eq for GenericOrdSet<A, P> {}
+impl<A: Ord, P: SharedPointerKind, const N: usize> Eq for GenericOrdSet<A, P, N> {}
 
-impl<A: Ord, P: SharedPointerKind> PartialOrd for GenericOrdSet<A, P> {
+impl<A: Ord, P: SharedPointerKind, const N: usize> PartialOrd for GenericOrdSet<A, P, N> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<A: Ord, P: SharedPointerKind> Ord for GenericOrdSet<A, P> {
+impl<A: Ord, P: SharedPointerKind, const N: usize> Ord for GenericOrdSet<A, P, N> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
-impl<A: Ord + Hash, P: SharedPointerKind> Hash for GenericOrdSet<A, P> {
+impl<A: Ord + Hash, P: SharedPointerKind, const N: usize> Hash for GenericOrdSet<A, P, N> {
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -761,45 +765,45 @@ impl<A: Ord + Hash, P: SharedPointerKind> Hash for GenericOrdSet<A, P> {
     }
 }
 
-impl<A, P: SharedPointerKind> Default for GenericOrdSet<A, P> {
+impl<A, P: SharedPointerKind, const N: usize> Default for GenericOrdSet<A, P, N> {
     fn default() -> Self {
         GenericOrdSet::new()
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> Add for GenericOrdSet<A, P> {
-    type Output = GenericOrdSet<A, P>;
+impl<A: Ord + Clone, P: SharedPointerKind, const N: usize> Add for GenericOrdSet<A, P, N> {
+    type Output = GenericOrdSet<A, P, N>;
 
     fn add(self, other: Self) -> Self::Output {
         self.union(other)
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> Add for &GenericOrdSet<A, P> {
-    type Output = GenericOrdSet<A, P>;
+impl<A: Ord + Clone, P: SharedPointerKind, const N: usize> Add for &GenericOrdSet<A, P, N> {
+    type Output = GenericOrdSet<A, P, N>;
 
     fn add(self, other: Self) -> Self::Output {
         self.clone().union(other.clone())
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> Mul for GenericOrdSet<A, P> {
-    type Output = GenericOrdSet<A, P>;
+impl<A: Ord + Clone, P: SharedPointerKind, const N: usize> Mul for GenericOrdSet<A, P, N> {
+    type Output = GenericOrdSet<A, P, N>;
 
     fn mul(self, other: Self) -> Self::Output {
         self.intersection(other)
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> Mul for &GenericOrdSet<A, P> {
-    type Output = GenericOrdSet<A, P>;
+impl<A: Ord + Clone, P: SharedPointerKind, const N: usize> Mul for &GenericOrdSet<A, P, N> {
+    type Output = GenericOrdSet<A, P, N>;
 
     fn mul(self, other: Self) -> Self::Output {
         self.clone().intersection(other.clone())
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> Sum for GenericOrdSet<A, P> {
+impl<A: Ord + Clone, P: SharedPointerKind, const N: usize> Sum for GenericOrdSet<A, P, N> {
     fn sum<I>(it: I) -> Self
     where
         I: Iterator<Item = Self>,
@@ -808,7 +812,7 @@ impl<A: Ord + Clone, P: SharedPointerKind> Sum for GenericOrdSet<A, P> {
     }
 }
 
-impl<A, R, P> Extend<R> for GenericOrdSet<A, P>
+impl<A, R, P, const N: usize> Extend<R> for GenericOrdSet<A, P, N>
 where
     A: Ord + Clone + From<R>,
     P: SharedPointerKind,
@@ -823,7 +827,7 @@ where
     }
 }
 
-impl<A: Ord + Debug, P: SharedPointerKind> Debug for GenericOrdSet<A, P> {
+impl<A: Ord + Debug, P: SharedPointerKind, const N: usize> Debug for GenericOrdSet<A, P, N> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         f.debug_set().entries(self.iter()).finish()
     }
@@ -832,12 +836,12 @@ impl<A: Ord + Debug, P: SharedPointerKind> Debug for GenericOrdSet<A, P> {
 // Iterators
 
 /// An iterator over the elements of a set.
-pub struct Iter<'a, A, P: SharedPointerKind> {
-    it: map::Iter<'a, A, (), P>,
+pub struct Iter<'a, A, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it: map::Iter<'a, A, (), P, N>,
 }
 
 // We impl Clone instead of deriving it, because we want Clone even if K and V aren't.
-impl<'a, A, P: SharedPointerKind> Clone for Iter<'a, A, P> {
+impl<'a, A, P: SharedPointerKind, const N: usize> Clone for Iter<'a, A, P, N> {
     fn clone(&self) -> Self {
         Iter {
             it: self.it.clone(),
@@ -845,7 +849,7 @@ impl<'a, A, P: SharedPointerKind> Clone for Iter<'a, A, P> {
     }
 }
 
-impl<'a, A, P: SharedPointerKind> Iterator for Iter<'a, A, P>
+impl<'a, A, P: SharedPointerKind, const N: usize> Iterator for Iter<'a, A, P, N>
 where
     A: 'a + Ord,
 {
@@ -863,7 +867,7 @@ where
     }
 }
 
-impl<'a, A, P> DoubleEndedIterator for Iter<'a, A, P>
+impl<'a, A, P, const N: usize> DoubleEndedIterator for Iter<'a, A, P, N>
 where
     A: 'a + Ord,
     P: SharedPointerKind,
@@ -873,14 +877,14 @@ where
     }
 }
 
-impl<'a, A, P> ExactSizeIterator for Iter<'a, A, P>
+impl<'a, A, P, const N: usize> ExactSizeIterator for Iter<'a, A, P, N>
 where
     A: 'a + Ord,
     P: SharedPointerKind,
 {
 }
 
-impl<'a, A, P> FusedIterator for Iter<'a, A, P>
+impl<'a, A, P, const N: usize> FusedIterator for Iter<'a, A, P, N>
 where
     A: 'a + Ord,
     P: SharedPointerKind,
@@ -892,11 +896,11 @@ where
 /// The only difference from `Iter` is that this one doesn't implement
 /// `ExactSizeIterator` because we can't know the size of the range without first
 /// iterating over it to count.
-pub struct RangedIter<'a, A, P: SharedPointerKind> {
-    it: map::RangedIter<'a, A, (), P>,
+pub struct RangedIter<'a, A, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it: map::RangedIter<'a, A, (), P, N>,
 }
 
-impl<'a, A, P> Iterator for RangedIter<'a, A, P>
+impl<'a, A, P, const N: usize> Iterator for RangedIter<'a, A, P, N>
 where
     A: 'a + Ord,
     P: SharedPointerKind,
@@ -915,7 +919,7 @@ where
     }
 }
 
-impl<'a, A, P> DoubleEndedIterator for RangedIter<'a, A, P>
+impl<'a, A, P, const N: usize> DoubleEndedIterator for RangedIter<'a, A, P, N>
 where
     A: 'a + Ord,
     P: SharedPointerKind,
@@ -926,11 +930,11 @@ where
 }
 
 /// A consuming iterator over the elements of a set.
-pub struct ConsumingIter<A, P: SharedPointerKind> {
-    it: map::ConsumingIter<A, (), P>,
+pub struct ConsumingIter<A, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it: map::ConsumingIter<A, (), P, N>,
 }
 
-impl<A, P: SharedPointerKind> Clone for ConsumingIter<A, P> {
+impl<A, P: SharedPointerKind, const N: usize> Clone for ConsumingIter<A, P, N> {
     fn clone(&self) -> Self {
         Self {
             it: self.it.clone(),
@@ -938,7 +942,7 @@ impl<A, P: SharedPointerKind> Clone for ConsumingIter<A, P> {
     }
 }
 
-impl<A, P> Iterator for ConsumingIter<A, P>
+impl<A, P, const N: usize> Iterator for ConsumingIter<A, P, N>
 where
     A: Clone,
     P: SharedPointerKind,
@@ -957,7 +961,7 @@ where
     }
 }
 
-impl<A, P> DoubleEndedIterator for ConsumingIter<A, P>
+impl<A, P, const N: usize> DoubleEndedIterator for ConsumingIter<A, P, N>
 where
     A: Clone,
     P: SharedPointerKind,
@@ -967,14 +971,14 @@ where
     }
 }
 
-impl<A, P> ExactSizeIterator for ConsumingIter<A, P>
+impl<A, P, const N: usize> ExactSizeIterator for ConsumingIter<A, P, N>
 where
     A: Clone,
     P: SharedPointerKind,
 {
 }
 
-impl<A, P> FusedIterator for ConsumingIter<A, P>
+impl<A, P, const N: usize> FusedIterator for ConsumingIter<A, P, N>
 where
     A: Clone,
     P: SharedPointerKind,
@@ -982,8 +986,8 @@ where
 }
 
 /// An iterator over the difference between two sets.
-pub struct DiffIter<'a, 'b, A, P: SharedPointerKind> {
-    it: map::DiffIter<'a, 'b, A, (), P>,
+pub struct DiffIter<'a, 'b, A, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it: map::DiffIter<'a, 'b, A, (), P, N>,
 }
 
 /// A description of a difference between two ordered sets.
@@ -995,7 +999,7 @@ pub enum DiffItem<'a, 'b, A> {
     Remove(&'a A),
 }
 
-impl<'a, 'b, A, P> Iterator for DiffIter<'a, 'b, A, P>
+impl<'a, 'b, A, P, const N: usize> Iterator for DiffIter<'a, 'b, A, P, N>
 where
     A: Ord + PartialEq,
     P: SharedPointerKind,
@@ -1016,14 +1020,14 @@ where
     }
 }
 
-impl<'a, 'b, A, P> FusedIterator for DiffIter<'a, 'b, A, P>
+impl<'a, 'b, A, P, const N: usize> FusedIterator for DiffIter<'a, 'b, A, P, N>
 where
     A: Ord + PartialEq,
     P: SharedPointerKind,
 {
 }
 
-impl<A, R, P> FromIterator<R> for GenericOrdSet<A, P>
+impl<A, R, P, const N: usize> FromIterator<R> for GenericOrdSet<A, P, N>
 where
     A: Ord + Clone + From<R>,
     P: SharedPointerKind,
@@ -1040,26 +1044,26 @@ where
     }
 }
 
-impl<'a, A, P> IntoIterator for &'a GenericOrdSet<A, P>
+impl<'a, A, P, const N: usize> IntoIterator for &'a GenericOrdSet<A, P, N>
 where
     A: 'a + Ord,
     P: SharedPointerKind,
 {
     type Item = &'a A;
-    type IntoIter = Iter<'a, A, P>;
+    type IntoIter = Iter<'a, A, P, N>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
 }
 
-impl<A, P> IntoIterator for GenericOrdSet<A, P>
+impl<A, P, const N: usize> IntoIterator for GenericOrdSet<A, P, N>
 where
     A: Ord + Clone,
     P: SharedPointerKind,
 {
     type Item = A;
-    type IntoIter = ConsumingIter<A, P>;
+    type IntoIter = ConsumingIter<A, P, N>;
 
     fn into_iter(self) -> Self::IntoIter {
         ConsumingIter {
@@ -1070,19 +1074,19 @@ where
 
 // Conversions
 
-impl<A, OA, P1, P2> From<&GenericOrdSet<&A, P2>> for GenericOrdSet<OA, P1>
+impl<A, OA, P1, P2, const N: usize> From<&GenericOrdSet<&A, P2, N>> for GenericOrdSet<OA, P1, N>
 where
     A: ToOwned<Owned = OA> + Ord + ?Sized,
     OA: Ord + Clone,
     P1: SharedPointerKind,
     P2: SharedPointerKind,
 {
-    fn from(set: &GenericOrdSet<&A, P2>) -> Self {
+    fn from(set: &GenericOrdSet<&A, P2, N>) -> Self {
         set.iter().map(|a| (*a).to_owned()).collect()
     }
 }
 
-impl<'a, A, P> From<&'a [A]> for GenericOrdSet<A, P>
+impl<'a, A, P, const N: usize> From<&'a [A]> for GenericOrdSet<A, P, N>
 where
     A: Ord + Clone,
     P: SharedPointerKind,
@@ -1092,56 +1096,72 @@ where
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> From<Vec<A>> for GenericOrdSet<A, P> {
+impl<A: Ord + Clone, P: SharedPointerKind, const N: usize> From<Vec<A>> for GenericOrdSet<A, P, N> {
     fn from(vec: Vec<A>) -> Self {
         vec.into_iter().collect()
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> From<&Vec<A>> for GenericOrdSet<A, P> {
+impl<A: Ord + Clone, P: SharedPointerKind, const N: usize> From<&Vec<A>>
+    for GenericOrdSet<A, P, N>
+{
     fn from(vec: &Vec<A>) -> Self {
         vec.iter().cloned().collect()
     }
 }
 
-impl<A: Eq + Hash + Ord + Clone, P: SharedPointerKind> From<collections::HashSet<A>>
-    for GenericOrdSet<A, P>
+impl<A: Eq + Hash + Ord + Clone, P: SharedPointerKind, const N: usize> From<collections::HashSet<A>>
+    for GenericOrdSet<A, P, N>
 {
     fn from(hash_set: collections::HashSet<A>) -> Self {
         hash_set.into_iter().collect()
     }
 }
 
-impl<A: Eq + Hash + Ord + Clone, P: SharedPointerKind> From<&collections::HashSet<A>>
-    for GenericOrdSet<A, P>
+impl<A: Eq + Hash + Ord + Clone, P: SharedPointerKind, const N: usize>
+    From<&collections::HashSet<A>> for GenericOrdSet<A, P, N>
 {
     fn from(hash_set: &collections::HashSet<A>) -> Self {
         hash_set.iter().cloned().collect()
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> From<collections::BTreeSet<A>> for GenericOrdSet<A, P> {
+impl<A: Ord + Clone, P: SharedPointerKind, const N: usize> From<collections::BTreeSet<A>>
+    for GenericOrdSet<A, P, N>
+{
     fn from(btree_set: collections::BTreeSet<A>) -> Self {
         btree_set.into_iter().collect()
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> From<&collections::BTreeSet<A>> for GenericOrdSet<A, P> {
+impl<A: Ord + Clone, P: SharedPointerKind, const N: usize> From<&collections::BTreeSet<A>>
+    for GenericOrdSet<A, P, N>
+{
     fn from(btree_set: &collections::BTreeSet<A>) -> Self {
         btree_set.iter().cloned().collect()
     }
 }
 
-impl<A: Hash + Eq + Ord + Clone, S: BuildHasher, P1: SharedPointerKind, P2: SharedPointerKind>
-    From<GenericHashSet<A, S, P2>> for GenericOrdSet<A, P1>
+impl<
+        A: Hash + Eq + Ord + Clone,
+        S: BuildHasher,
+        P1: SharedPointerKind,
+        P2: SharedPointerKind,
+        const N: usize,
+    > From<GenericHashSet<A, S, P2>> for GenericOrdSet<A, P1, N>
 {
     fn from(hashset: GenericHashSet<A, S, P2>) -> Self {
         hashset.into_iter().collect()
     }
 }
 
-impl<A: Hash + Eq + Ord + Clone, S: BuildHasher, P1: SharedPointerKind, P2: SharedPointerKind>
-    From<&GenericHashSet<A, S, P2>> for GenericOrdSet<A, P1>
+impl<
+        A: Hash + Eq + Ord + Clone,
+        S: BuildHasher,
+        P1: SharedPointerKind,
+        P2: SharedPointerKind,
+        const N: usize,
+    > From<&GenericHashSet<A, S, P2>> for GenericOrdSet<A, P1, N>
 {
     fn from(hashset: &GenericHashSet<A, S, P2>) -> Self {
         hashset.into_iter().cloned().collect()

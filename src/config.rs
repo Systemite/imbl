@@ -8,16 +8,18 @@ pub(crate) const VECTOR_CHUNK_SIZE: usize = 4;
 #[cfg(not(feature = "small-chunks"))]
 pub(crate) const VECTOR_CHUNK_SIZE: usize = 64;
 
-/// The branching factor of B-trees
+/// The default node size of B-trees, used when `GenericOrdMap`/`GenericOrdSet` are not
+/// given an explicit node size.
 // Value of 6 chosen improve test coverage, specifically
 // so that both deletion node merging and rebalancing are tested.
-// Must be an even number!
+// Must be an even number of at least 4 (checked at compile time by `NodeSize::VALID`).
 #[cfg(feature = "small-chunks")]
 pub(crate) const ORD_CHUNK_SIZE: usize = 6;
 // Value of 16 chosen based on performance analysis. Larger nodes might improve lookup slightly
 // and bulk mutable operations more so, but suffers severe copy overhead for small mutations.
 // Under typical workloads (e.g. 70% lookup, 25% small mutation, 5% bulk mutation), 16 arguably
-// provides the best balance.
+// provides the best balance. Workloads dominated by lookups, iteration or set operations can
+// choose larger nodes per type through the `N` parameter of `GenericOrdMap`/`GenericOrdSet`.
 #[cfg(not(feature = "small-chunks"))]
 pub(crate) const ORD_CHUNK_SIZE: usize = 16;
 
