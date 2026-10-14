@@ -12,26 +12,45 @@ use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Comparable;
 use imbl_sized_chunks::Chunk;
 
-pub(crate) use crate::config::ORD_CHUNK_SIZE as NODE_SIZE;
+pub(crate) use crate::config::ORD_CHUNK_SIZE as DEFAULT_NODE_SIZE;
 
-const MEDIAN: usize = NODE_SIZE / 2;
-const THIRD: usize = NODE_SIZE / 3;
-const NUM_CHILDREN: usize = NODE_SIZE + 1;
+/// Size parameters derived from the node size `N` of a B+Tree.
+///
+/// A leaf holds at most `N` entries and a branch holds at most `N` children
+/// (and therefore at most `N - 1` keys). Stable Rust cannot use `N + 1` as an
+/// array length, which is why branches are bounded by children rather than keys.
+pub(crate) struct NodeSize<const N: usize>;
+
+impl<const N: usize> NodeSize<N> {
+    /// Post-monomorphization check that `N` is a usable node size. Referencing
+    /// this constant turns an invalid `N` into a compile error.
+    pub(crate) const VALID: () = assert!(
+        N >= 4 && N % 2 == 0,
+        "the node size of an OrdMap/OrdSet must be an even number of at least 4"
+    );
+    const BRANCH_KEYS: usize = N - 1;
+    const MEDIAN: usize = N / 2;
+    const THIRD: usize = N / 3;
+}
 
 /// A node in a `B+Tree`.
 ///
 /// The main tree representation uses [`Branch`] and [`Leaf`]; this is only used
 /// in places that want to handle either a branch or a leaf.
 #[derive(Debug)]
-pub(crate) enum Node<K, V, P: SharedPointerKind> {
-    Branch(SharedPointer<Branch<K, V, P>, P>),
-    Leaf(SharedPointer<Leaf<K, V>, P>),
+pub(crate) enum Node<K, V, P: SharedPointerKind, const N: usize> {
+    Branch(SharedPointer<Branch<K, V, P, N>, P>),
+    Leaf(SharedPointer<Leaf<K, V, N>, P>),
 }
 
-impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, P: SharedPointerKind> Branch<K, V, P> {
+impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, P: SharedPointerKind, const N: usize>
+    Branch<K, V, P, N>
+{
     #[cfg(any(test, fuzzing))]
     pub(crate) fn check_sane(&self, is_root: bool) -> usize {
-        assert!(self.keys.len() >= if is_root { 1 } else { MEDIAN - 1 });
+        // Branches report underflow below MEDIAN, but their parent only merges or
+        // rebalances them once they drop below THIRD, so THIRD is the real lower bound.
+        assert!(self.keys.len() >= if is_root { 1 } else { NodeSize::<N>::THIRD });
         assert_eq!(self.keys.len() + 1, self.children.len());
         assert!(self.keys.windows(2).all(|w| w[0] < w[1]));
         match &self.children {
@@ -55,15 +74,17 @@ impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, P: SharedPointerKind> Branch<
         }
     }
 }
-impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug> Leaf<K, V> {
+impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, const N: usize> Leaf<K, V, N> {
     #[cfg(any(test, fuzzing))]
     pub(crate) fn check_sane(&self, is_root: bool) -> usize {
         assert!(self.keys.windows(2).all(|w| w[0].0 < w[1].0));
-        assert!(self.keys.len() >= if is_root { 0 } else { THIRD });
+        assert!(self.keys.len() >= if is_root { 0 } else { NodeSize::<N>::THIRD });
         self.keys.len()
     }
 }
-impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, P: SharedPointerKind> Node<K, V, P> {
+impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, P: SharedPointerKind, const N: usize>
+    Node<K, V, P, N>
+{
     /// Check invariants
     #[cfg(any(test, fuzzing))]
     pub(crate) fn check_sane(&self, is_root: bool) -> usize {
@@ -74,8 +95,9 @@ impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, P: SharedPointerKind> Node<K,
     }
 }
 
-impl<K, V, P: SharedPointerKind> Node<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> Node<K, V, P, N> {
     pub(crate) fn unit(key: K, value: V) -> Self {
+        let () = NodeSize::<N>::VALID;
         Node::Leaf(SharedPointer::new(Leaf {
             keys: Chunk::unit((key, value)),
         }))
@@ -103,22 +125,23 @@ impl<K, V, P: SharedPointerKind> Node<K, V, P> {
 /// * keys.len() + 1 == children.len()
 /// * all children have level = level - 1 (or level is 1 and all children are leaves)
 /// * all keys in the subtree at children[i] are between keys[i - 1] (if i > 0) and keys[i] (if i < keys.len()).
-/// * root branch must have at least 1 key, whereas non-root branches must have at least MEDIAN - 1 keys
+/// * root branch must have at least 1 key, whereas non-root branches must have at least THIRD keys
+/// * a branch has at most N children, and therefore at most N - 1 keys
 #[derive(Debug)]
-pub(crate) struct Branch<K, V, P: SharedPointerKind> {
-    keys: Chunk<K, NODE_SIZE>,
-    children: Children<K, V, P>,
+pub(crate) struct Branch<K, V, P: SharedPointerKind, const N: usize> {
+    keys: Chunk<K, N>,
+    children: Children<K, V, P, N>,
 }
 
 #[derive(Debug)]
-pub(crate) enum Children<K, V, P: SharedPointerKind> {
+pub(crate) enum Children<K, V, P: SharedPointerKind, const N: usize> {
     /// implicitly level 1
     Leaves {
-        leaves: Chunk<SharedPointer<Leaf<K, V>, P>, NUM_CHILDREN>,
+        leaves: Chunk<SharedPointer<Leaf<K, V, N>, P>, N>,
     },
     /// level >= 2
     Branches {
-        branches: Chunk<SharedPointer<Branch<K, V, P>, P>, NUM_CHILDREN>,
+        branches: Chunk<SharedPointer<Branch<K, V, P, N>, P>, N>,
         /// The level of the tree node that contains these children.
         ///
         /// Leaves have level zero, so branches have level at least one. Since this is the
@@ -127,7 +150,7 @@ pub(crate) enum Children<K, V, P: SharedPointerKind> {
     },
 }
 
-impl<K, V, P: SharedPointerKind> Children<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> Children<K, V, P, N> {
     fn len(&self) -> usize {
         match self {
             Children::Leaves { leaves } => leaves.len(),
@@ -206,7 +229,7 @@ impl<K, V, P: SharedPointerKind> Children<K, V, P> {
             _ => panic!("mismatched insert_front"),
         }
     }
-    fn insert(&mut self, index: usize, node: Node<K, V, P>) {
+    fn insert(&mut self, index: usize, node: Node<K, V, P, N>) {
         match (self, node) {
             (Children::Leaves { leaves }, Node::Leaf(node)) => leaves.insert(index, node),
             (Children::Branches { branches, .. }, Node::Branch(node)) => {
@@ -228,8 +251,8 @@ impl<K, V, P: SharedPointerKind> Children<K, V, P> {
     }
 }
 
-impl<K, V, P: SharedPointerKind> Branch<K, V, P> {
-    pub(crate) fn pop_single_child(&mut self) -> Option<Node<K, V, P>> {
+impl<K, V, P: SharedPointerKind, const N: usize> Branch<K, V, P, N> {
+    pub(crate) fn pop_single_child(&mut self) -> Option<Node<K, V, P, N>> {
         if self.children.len() == 1 {
             debug_assert_eq!(self.keys.len(), 0);
             Some(match &mut self.children {
@@ -256,11 +279,11 @@ impl<K, V, P: SharedPointerKind> Branch<K, V, P> {
 /// * leaf is the lowest level in the tree (level 0)
 /// * non-root leaves must have at least THIRD keys
 #[derive(Debug)]
-pub(crate) struct Leaf<K, V> {
-    keys: Chunk<(K, V), NODE_SIZE>,
+pub(crate) struct Leaf<K, V, const N: usize> {
+    keys: Chunk<(K, V), N>,
 }
 
-impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Node<K, V, P> {
+impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Node<K, V, P, N> {
     /// Removes a key from the node or its children.
     /// Returns `true` if the node is underflowed and should be rebalanced.
     pub(crate) fn remove<Q>(&mut self, key: &Q, removed: &mut Option<(K, V)>) -> bool
@@ -274,7 +297,7 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Node<K, V, P> {
     }
 }
 
-impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
+impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V, P, N> {
     pub(crate) fn remove<Q>(&mut self, key: &Q, removed: &mut Option<(K, V)>) -> bool
     where
         Q: Comparable<K> + ?Sized,
@@ -296,11 +319,11 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
         // Underflow if the branch is < 1/2 full. Since the branches are relatively
         // rarely rebalanced (given relaxed leaf underflow), we can afford to be
         // a bit more conservative here.
-        self.keys.len() < MEDIAN
+        self.keys.len() < NodeSize::<N>::MEDIAN
     }
 }
 
-impl<K: Ord + Clone, V: Clone> Leaf<K, V> {
+impl<K: Ord + Clone, V: Clone, const N: usize> Leaf<K, V, N> {
     pub(crate) fn remove<Q>(&mut self, key: &Q, removed: &mut Option<(K, V)>) -> bool
     where
         Q: Comparable<K> + ?Sized,
@@ -311,11 +334,11 @@ impl<K: Ord + Clone, V: Clone> Leaf<K, V> {
         // Underflow if the leaf is < 1/3 full. This relaxed underflow (vs. 1/2 full) is
         // useful to prevent degenerate cases where a random insert/remove workload will
         // constantly merge/split a leaf.
-        self.keys.len() < THIRD
+        self.keys.len() < NodeSize::<N>::THIRD
     }
 }
 
-impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
+impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V, P, N> {
     #[cold]
     pub(crate) fn branch_rebalance_children(&mut self, underflow_idx: usize) {
         let left_idx = underflow_idx.saturating_sub(1);
@@ -331,16 +354,20 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
                 // Since we prefer merging, for rebalancing to apply the the largest child will be least 2/3 full,
                 // which results in two at least half full nodes after rebalancing.
                 match (left, mid, right) {
-                    (left, mid, _) if left.keys.len() + mid.keys.len() <= NODE_SIZE => {
+                    (left, mid, _) if left.keys.len() + mid.keys.len() <= N => {
                         Self::merge_leaves(leaves, &mut self.keys, left_idx, false);
                     }
-                    (_, mid, Some(right)) if mid.keys.len() + right.keys.len() <= NODE_SIZE => {
+                    (_, mid, Some(right)) if mid.keys.len() + right.keys.len() <= N => {
                         Self::merge_leaves(leaves, &mut self.keys, left_idx + 1, true);
                     }
-                    (left, mid, _) if mid.keys.len().min(left.keys.len()) < THIRD => {
+                    (left, mid, _)
+                        if mid.keys.len().min(left.keys.len()) < NodeSize::<N>::THIRD =>
+                    {
                         Self::rebalance_leaves(leaves, &mut self.keys, left_idx);
                     }
-                    (_, mid, Some(right)) if mid.keys.len().min(right.keys.len()) < THIRD => {
+                    (_, mid, Some(right))
+                        if mid.keys.len().min(right.keys.len()) < NodeSize::<N>::THIRD =>
+                    {
                         Self::rebalance_leaves(leaves, &mut self.keys, left_idx + 1);
                     }
                     _ => (),
@@ -353,16 +380,24 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
                     _ => return,
                 };
                 match (left, mid, right) {
-                    (left, mid, _) if left.keys.len() + mid.keys.len() < NODE_SIZE => {
+                    (left, mid, _)
+                        if left.keys.len() + mid.keys.len() < NodeSize::<N>::BRANCH_KEYS =>
+                    {
                         Self::merge_branches(branches, &mut self.keys, left_idx, false);
                     }
-                    (_, mid, Some(right)) if mid.keys.len() + right.keys.len() < NODE_SIZE => {
+                    (_, mid, Some(right))
+                        if mid.keys.len() + right.keys.len() < NodeSize::<N>::BRANCH_KEYS =>
+                    {
                         Self::merge_branches(branches, &mut self.keys, left_idx + 1, true);
                     }
-                    (left, mid, _) if mid.keys.len().min(left.keys.len()) < THIRD => {
+                    (left, mid, _)
+                        if mid.keys.len().min(left.keys.len()) < NodeSize::<N>::THIRD =>
+                    {
                         Self::rebalance_branches(branches, &mut self.keys, left_idx);
                     }
-                    (_, mid, Some(right)) if mid.keys.len().min(right.keys.len()) < THIRD => {
+                    (_, mid, Some(right))
+                        if mid.keys.len().min(right.keys.len()) < NodeSize::<N>::THIRD =>
+                    {
                         Self::rebalance_branches(branches, &mut self.keys, left_idx + 1);
                     }
                     _ => (),
@@ -375,8 +410,8 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
     ///
     /// Assumes that the two children can fit in a single leaf, panicking if not.
     fn merge_leaves(
-        children: &mut Chunk<SharedPointer<Leaf<K, V>, P>, NUM_CHILDREN>,
-        keys: &mut Chunk<K, NODE_SIZE>,
+        children: &mut Chunk<SharedPointer<Leaf<K, V, N>, P>, N>,
+        keys: &mut Chunk<K, N>,
         left_idx: usize,
         keep_left: bool,
     ) {
@@ -400,8 +435,8 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
     /// Rebalances two adjacent leaves so that they have the same
     /// number of keys (or differ by at most 1).
     fn rebalance_leaves(
-        children: &mut Chunk<SharedPointer<Leaf<K, V>, P>, NUM_CHILDREN>,
-        keys: &mut Chunk<K, NODE_SIZE>,
+        children: &mut Chunk<SharedPointer<Leaf<K, V, N>, P>, N>,
+        keys: &mut Chunk<K, N>,
         left_idx: usize,
     ) {
         let [left, right, ..] = &mut children[left_idx..] else {
@@ -429,8 +464,8 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
     /// (or differ by at most 1). The separator key is rotated between the two branches.
     /// to keep the invariants of the parent branch.
     fn rebalance_branches(
-        children: &mut Chunk<SharedPointer<Branch<K, V, P>, P>, NUM_CHILDREN>,
-        keys: &mut Chunk<K, NODE_SIZE>,
+        children: &mut Chunk<SharedPointer<Branch<K, V, P, N>, P>, N>,
+        keys: &mut Chunk<K, N>,
         left_idx: usize,
     ) {
         let [left, right, ..] = &mut children[left_idx..] else {
@@ -469,8 +504,8 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
     ///
     /// Assumes that the two children can fit in a single branch, panicking if not.
     fn merge_branches(
-        children: &mut Chunk<SharedPointer<Branch<K, V, P>, P>, NUM_CHILDREN>,
-        keys: &mut Chunk<K, NODE_SIZE>,
+        children: &mut Chunk<SharedPointer<Branch<K, V, P, N>, P>, N>,
+        keys: &mut Chunk<K, N>,
         left_idx: usize,
         keep_left: bool,
     ) {
@@ -496,8 +531,8 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
     }
 }
 
-impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
-    pub(crate) fn insert(&mut self, key: K, value: V) -> InsertAction<K, V, P> {
+impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V, P, N> {
+    pub(crate) fn insert(&mut self, key: K, value: V) -> InsertAction<K, V, P, N> {
         let i = slice_ext::binary_search_by(&self.keys, |k| k.cmp(&key))
             .map(|x| x + 1)
             .unwrap_or_else(|x| x);
@@ -510,7 +545,9 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
             }
         };
         match insert_action {
-            InsertAction::Split(new_key, new_node) if self.keys.len() >= NODE_SIZE => {
+            InsertAction::Split(new_key, new_node)
+                if self.keys.len() >= NodeSize::<N>::BRANCH_KEYS =>
+            {
                 self.split_branch_insert(i, new_key, new_node)
             }
             InsertAction::Split(separator, new_node) => {
@@ -522,18 +559,18 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
         }
     }
 }
-impl<K: Ord + Clone, V: Clone> Leaf<K, V> {
+impl<K: Ord + Clone, V: Clone, const N: usize> Leaf<K, V, N> {
     pub(crate) fn insert<P: SharedPointerKind>(
         &mut self,
         key: K,
         value: V,
-    ) -> InsertAction<K, V, P> {
+    ) -> InsertAction<K, V, P, N> {
         match slice_ext::binary_search_by(&self.keys, |(k, _)| k.cmp(&key)) {
             Ok(i) => {
                 let (k, v) = mem::replace(&mut self.keys[i], (key, value));
                 InsertAction::Replaced(k, v)
             }
-            Err(i) if self.keys.len() >= NODE_SIZE => self.split_leaf_insert(i, key, value),
+            Err(i) if self.keys.len() >= N => self.split_leaf_insert(i, key, value),
             Err(i) => {
                 self.keys.insert(i, (key, value));
                 InsertAction::Inserted
@@ -541,40 +578,43 @@ impl<K: Ord + Clone, V: Clone> Leaf<K, V> {
         }
     }
 }
-impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Node<K, V, P> {
-    pub(crate) fn insert(&mut self, key: K, value: V) -> InsertAction<K, V, P> {
+impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Node<K, V, P, N> {
+    pub(crate) fn insert(&mut self, key: K, value: V) -> InsertAction<K, V, P, N> {
         match self {
             Node::Branch(branch) => SharedPointer::make_mut(branch).insert(key, value),
             Node::Leaf(leaf) => SharedPointer::make_mut(leaf).insert(key, value),
         }
     }
 }
-impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
+impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V, P, N> {
     #[cold]
     fn split_branch_insert(
         &mut self,
         i: usize,
         new_key: K,
-        new_node: Node<K, V, P>,
-    ) -> InsertAction<K, V, P> {
-        let split_idx = MEDIAN + (i > MEDIAN) as usize;
+        new_node: Node<K, V, P, N>,
+    ) -> InsertAction<K, V, P, N> {
+        // A full branch has N - 1 keys, so after inserting the new key the left half
+        // gets MEDIAN keys, the right half MEDIAN - 1, and one becomes the separator.
+        let median = NodeSize::<N>::MEDIAN;
+        let split_idx = median + (i > median) as usize;
         let mut right_keys = self.keys.split_off(split_idx);
-        let split_idx = MEDIAN + (i >= MEDIAN) as usize;
+        let split_idx = median + (i >= median) as usize;
         let mut right_children = self.children.split_off(split_idx);
-        let separator = if i == MEDIAN {
+        let separator = if i == median {
             right_children.insert(0, new_node.clone());
             new_key
         } else {
-            if i < MEDIAN {
+            if i < median {
                 self.keys.insert(i, new_key);
                 self.children.insert(i + 1, new_node);
             } else {
-                right_keys.insert(i - (MEDIAN + 1), new_key);
-                right_children.insert(i - (MEDIAN + 1) + 1, new_node);
+                right_keys.insert(i - (median + 1), new_key);
+                right_children.insert(i - (median + 1) + 1, new_node);
             }
             self.keys.pop_back()
         };
-        debug_assert_eq!(self.keys.len(), right_keys.len());
+        debug_assert_eq!(self.keys.len(), right_keys.len() + 1);
         debug_assert_eq!(self.keys.len() + 1, self.children.len());
         debug_assert_eq!(right_keys.len() + 1, right_children.len());
         InsertAction::Split(
@@ -587,19 +627,20 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
     }
 }
 
-impl<K: Ord + Clone, V: Clone> Leaf<K, V> {
+impl<K: Ord + Clone, V: Clone, const N: usize> Leaf<K, V, N> {
     #[inline]
     fn split_leaf_insert<P: SharedPointerKind>(
         &mut self,
         i: usize,
         key: K,
         value: V,
-    ) -> InsertAction<K, V, P> {
-        let mut right_keys = self.keys.split_off(MEDIAN);
-        if i < MEDIAN {
+    ) -> InsertAction<K, V, P, N> {
+        let median = NodeSize::<N>::MEDIAN;
+        let mut right_keys = self.keys.split_off(median);
+        if i < median {
             self.keys.insert(i, (key, value));
         } else {
-            right_keys.insert(i - MEDIAN, (key, value));
+            right_keys.insert(i - median, (key, value));
         }
         InsertAction::Split(
             right_keys.first().unwrap().0.clone(),
@@ -608,7 +649,7 @@ impl<K: Ord + Clone, V: Clone> Leaf<K, V> {
     }
 }
 
-impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
+impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V, P, N> {
     pub(crate) fn lookup_mut<Q>(&mut self, key: &Q) -> Option<(&K, &mut V)>
     where
         Q: Comparable<K> + ?Sized,
@@ -625,7 +666,7 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Branch<K, V, P> {
     }
 }
 
-impl<K: Ord + Clone, V: Clone> Leaf<K, V> {
+impl<K: Ord + Clone, V: Clone, const N: usize> Leaf<K, V, N> {
     pub(crate) fn lookup_mut<Q>(&mut self, key: &Q) -> Option<(&K, &mut V)>
     where
         Q: Comparable<K> + ?Sized,
@@ -636,7 +677,7 @@ impl<K: Ord + Clone, V: Clone> Leaf<K, V> {
     }
 }
 
-impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Node<K, V, P> {
+impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Node<K, V, P, N> {
     pub(crate) fn lookup_mut<Q>(&mut self, key: &Q) -> Option<(&K, &mut V)>
     where
         Q: Comparable<K> + ?Sized,
@@ -664,7 +705,7 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Node<K, V, P> {
     }
 }
 
-impl<K: Ord, V, P: SharedPointerKind> Branch<K, V, P> {
+impl<K: Ord, V, P: SharedPointerKind, const N: usize> Branch<K, V, P, N> {
     fn min(&self) -> Option<&(K, V)> {
         let mut node = self;
         loop {
@@ -700,7 +741,7 @@ impl<K: Ord, V, P: SharedPointerKind> Branch<K, V, P> {
     }
 }
 
-impl<K: Ord, V> Leaf<K, V> {
+impl<K: Ord, V, const N: usize> Leaf<K, V, N> {
     fn min(&self) -> Option<&(K, V)> {
         self.keys.first()
     }
@@ -717,7 +758,7 @@ impl<K: Ord, V> Leaf<K, V> {
     }
 }
 
-impl<K: Ord, V, P: SharedPointerKind> Node<K, V, P> {
+impl<K: Ord, V, P: SharedPointerKind, const N: usize> Node<K, V, P, N> {
     pub(crate) fn min(&self) -> Option<&(K, V)> {
         match self {
             Node::Branch(branch) => branch.min(),
@@ -743,7 +784,7 @@ impl<K: Ord, V, P: SharedPointerKind> Node<K, V, P> {
     }
 }
 
-impl<K: Clone, V: Clone> Clone for Leaf<K, V> {
+impl<K: Clone, V: Clone, const N: usize> Clone for Leaf<K, V, N> {
     fn clone(&self) -> Self {
         Self {
             keys: self.keys.clone(),
@@ -751,7 +792,7 @@ impl<K: Clone, V: Clone> Clone for Leaf<K, V> {
     }
 }
 
-impl<K: Clone, V: Clone, P: SharedPointerKind> Clone for Branch<K, V, P> {
+impl<K: Clone, V: Clone, P: SharedPointerKind, const N: usize> Clone for Branch<K, V, P, N> {
     fn clone(&self) -> Self {
         Self {
             keys: self.keys.clone(),
@@ -760,7 +801,7 @@ impl<K: Clone, V: Clone, P: SharedPointerKind> Clone for Branch<K, V, P> {
     }
 }
 
-impl<K: Clone, V: Clone, P: SharedPointerKind> Clone for Children<K, V, P> {
+impl<K: Clone, V: Clone, P: SharedPointerKind, const N: usize> Clone for Children<K, V, P, N> {
     fn clone(&self) -> Self {
         match self {
             Children::Leaves { leaves } => Children::Leaves {
@@ -774,7 +815,7 @@ impl<K: Clone, V: Clone, P: SharedPointerKind> Clone for Children<K, V, P> {
     }
 }
 
-impl<K, V, P: SharedPointerKind> Clone for Node<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> Clone for Node<K, V, P, N> {
     fn clone(&self) -> Self {
         match self {
             Node::Branch(branch) => Node::Branch(branch.clone()),
@@ -783,29 +824,29 @@ impl<K, V, P: SharedPointerKind> Clone for Node<K, V, P> {
     }
 }
 
-pub(crate) enum InsertAction<K, V, P: SharedPointerKind> {
+pub(crate) enum InsertAction<K, V, P: SharedPointerKind, const N: usize> {
     Inserted,
     Replaced(K, V),
-    Split(K, Node<K, V, P>),
+    Split(K, Node<K, V, P, N>),
 }
 
-impl<K, V, P: SharedPointerKind> Default for Node<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> Default for Node<K, V, P, N> {
     fn default() -> Self {
         Node::Leaf(SharedPointer::new(Leaf { keys: Chunk::new() }))
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct ConsumingIter<K, V, P: SharedPointerKind> {
+pub(crate) struct ConsumingIter<K, V, P: SharedPointerKind, const N: usize> {
     /// The leaves of the tree, in order, note that this will remain the shared ptr
     /// as it will allows us to have a smaller VecDeque allocation and avoid eagerly
     /// cloning the leaves, which defeats the purpose of this iterator.
     /// Leaves present in the VecDeque are guaranteed to be non-empty.
-    leaves: VecDeque<SharedPointer<Leaf<K, V>, P>>,
+    leaves: VecDeque<SharedPointer<Leaf<K, V, N>, P>>,
     remaining: usize,
 }
 
-impl<K, V, P: SharedPointerKind> Clone for ConsumingIter<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> Clone for ConsumingIter<K, V, P, N> {
     fn clone(&self) -> Self {
         Self {
             leaves: self.leaves.clone(),
@@ -814,11 +855,11 @@ impl<K, V, P: SharedPointerKind> Clone for ConsumingIter<K, V, P> {
     }
 }
 
-impl<K, V, P: SharedPointerKind> ConsumingIter<K, V, P> {
-    pub(crate) fn new(node: Option<Node<K, V, P>>, size: usize) -> Self {
-        fn push<K, V, P: SharedPointerKind>(
-            out: &mut VecDeque<SharedPointer<Leaf<K, V>, P>>,
-            node: SharedPointer<Branch<K, V, P>, P>,
+impl<K, V, P: SharedPointerKind, const N: usize> ConsumingIter<K, V, P, N> {
+    pub(crate) fn new(node: Option<Node<K, V, P, N>>, size: usize) -> Self {
+        fn push<K, V, P: SharedPointerKind, const N: usize>(
+            out: &mut VecDeque<SharedPointer<Leaf<K, V, N>, P>>,
+            node: SharedPointer<Branch<K, V, P, N>, P>,
         ) {
             match &node.children {
                 Children::Leaves { leaves } => {
@@ -832,7 +873,7 @@ impl<K, V, P: SharedPointerKind> ConsumingIter<K, V, P> {
             }
         }
         // preallocate the VecDeque assuming each leaf is half full
-        let mut leaves = VecDeque::with_capacity(size.div_ceil(NODE_SIZE / 2));
+        let mut leaves = VecDeque::with_capacity(size.div_ceil(N / 2));
         match node {
             Some(Node::Branch(b)) => push(&mut leaves, b),
             Some(Node::Leaf(l)) => {
@@ -849,7 +890,9 @@ impl<K, V, P: SharedPointerKind> ConsumingIter<K, V, P> {
     }
 }
 
-impl<K: Clone, V: Clone, P: SharedPointerKind> Iterator for ConsumingIter<K, V, P> {
+impl<K: Clone, V: Clone, P: SharedPointerKind, const N: usize> Iterator
+    for ConsumingIter<K, V, P, N>
+{
     type Item = (K, V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -868,7 +911,9 @@ impl<K: Clone, V: Clone, P: SharedPointerKind> Iterator for ConsumingIter<K, V, 
     }
 }
 
-impl<K: Clone, V: Clone, P: SharedPointerKind> DoubleEndedIterator for ConsumingIter<K, V, P> {
+impl<K: Clone, V: Clone, P: SharedPointerKind, const N: usize> DoubleEndedIterator
+    for ConsumingIter<K, V, P, N>
+{
     fn next_back(&mut self) -> Option<Self::Item> {
         let node = self.leaves.back_mut()?;
         let leaf = SharedPointer::make_mut(node);
@@ -882,21 +927,21 @@ impl<K: Clone, V: Clone, P: SharedPointerKind> DoubleEndedIterator for Consuming
 }
 
 #[derive(Debug)]
-pub(crate) struct Iter<'a, K, V, P: SharedPointerKind> {
+pub(crate) struct Iter<'a, K, V, P: SharedPointerKind, const N: usize> {
     /// The forward and backward cursors
     /// The cursors are lazily initialized if their corresponding bound is unbounded
-    fwd: Cursor<'a, K, V, P>,
-    bwd: Cursor<'a, K, V, P>,
+    fwd: Cursor<'a, K, V, P, N>,
+    bwd: Cursor<'a, K, V, P, N>,
     fwd_yielded: bool,
     bwd_yielded: bool,
     exhausted: bool,
     exact: bool,
     remaining: usize,
-    root: Option<&'a Node<K, V, P>>,
+    root: Option<&'a Node<K, V, P, N>>,
 }
 
-impl<'a, K, V, P: SharedPointerKind> Iter<'a, K, V, P> {
-    pub(crate) fn new<R, Q>(root: Option<&'a Node<K, V, P>>, len: usize, range: R) -> Self
+impl<'a, K, V, P: SharedPointerKind, const N: usize> Iter<'a, K, V, P, N> {
+    pub(crate) fn new<R, Q>(root: Option<&'a Node<K, V, P, N>>, len: usize, range: R) -> Self
     where
         R: RangeBounds<Q>,
         Q: Comparable<K> + ?Sized,
@@ -930,9 +975,9 @@ impl<'a, K, V, P: SharedPointerKind> Iter<'a, K, V, P> {
 
         // Check if forward is > backward cursor to determine if we are exhausted
         // Due to the usage of zip this is correct even if the cursors are already or not initialized yet
-        fn cursors_exhausted<K, V, P: SharedPointerKind>(
-            fwd: &Cursor<'_, K, V, P>,
-            bwd: &Cursor<'_, K, V, P>,
+        fn cursors_exhausted<K, V, P: SharedPointerKind, const N: usize>(
+            fwd: &Cursor<'_, K, V, P, N>,
+            bwd: &Cursor<'_, K, V, P, N>,
         ) -> bool {
             for (&(fi, f), &(bi, b)) in fwd.stack.iter().zip(bwd.stack.iter()) {
                 if !std::ptr::eq(f, b) {
@@ -1015,7 +1060,7 @@ impl<'a, K, V, P: SharedPointerKind> Iter<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P: SharedPointerKind> Iterator for Iter<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, const N: usize> Iterator for Iter<'a, K, V, P, N> {
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1044,7 +1089,7 @@ impl<'a, K, V, P: SharedPointerKind> Iterator for Iter<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P: SharedPointerKind> DoubleEndedIterator for Iter<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, const N: usize> DoubleEndedIterator for Iter<'a, K, V, P, N> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.exhausted {
             return None;
@@ -1063,7 +1108,7 @@ impl<'a, K, V, P: SharedPointerKind> DoubleEndedIterator for Iter<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P: SharedPointerKind> Clone for Iter<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, const N: usize> Clone for Iter<'a, K, V, P, N> {
     fn clone(&self) -> Self {
         Self {
             fwd: self.fwd.clone(),
@@ -1079,13 +1124,13 @@ impl<'a, K, V, P: SharedPointerKind> Clone for Iter<'a, K, V, P> {
 }
 
 #[derive(Debug)]
-pub(crate) struct Cursor<'a, K, V, P: SharedPointerKind> {
+pub(crate) struct Cursor<'a, K, V, P: SharedPointerKind, const N: usize> {
     // a sequence of nodes starting at the root
-    stack: Vec<(usize, &'a Branch<K, V, P>)>,
-    leaf: Option<(usize, &'a Leaf<K, V>)>,
+    stack: Vec<(usize, &'a Branch<K, V, P, N>)>,
+    leaf: Option<(usize, &'a Leaf<K, V, N>)>,
 }
 
-impl<'a, K, V, P: SharedPointerKind> Clone for Cursor<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, const N: usize> Clone for Cursor<'a, K, V, P, N> {
     fn clone(&self) -> Self {
         Self {
             stack: self.stack.clone(),
@@ -1094,7 +1139,7 @@ impl<'a, K, V, P: SharedPointerKind> Clone for Cursor<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P: SharedPointerKind> Cursor<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, const N: usize> Cursor<'a, K, V, P, N> {
     /// Creates a new empty cursor.
     /// The variety of methods is to allow for a more efficient initialization
     /// in all cases.
@@ -1109,7 +1154,7 @@ impl<'a, K, V, P: SharedPointerKind> Cursor<'a, K, V, P> {
         self.stack.is_empty() && self.leaf.is_none()
     }
 
-    pub(crate) fn init(&mut self, node: Option<&'a Node<K, V, P>>) {
+    pub(crate) fn init(&mut self, node: Option<&'a Node<K, V, P, N>>) {
         if let Some(node) = node {
             self.stack.reserve_exact(node.level());
             match node {
@@ -1124,7 +1169,7 @@ impl<'a, K, V, P: SharedPointerKind> Cursor<'a, K, V, P> {
 
     // pushes the `ix`th child of `branch` onto the stack, whether it's a leaf
     // or a branch
-    fn push_child(&mut self, branch: &'a Branch<K, V, P>, ix: usize) {
+    fn push_child(&mut self, branch: &'a Branch<K, V, P, N>, ix: usize) {
         debug_assert!(
             self.leaf.is_none(),
             "it doesn't make sense to push when we're already at a leaf"
@@ -1202,7 +1247,7 @@ impl<'a, K, V, P: SharedPointerKind> Cursor<'a, K, V, P> {
     /// dropped wholesale. But as soon as a cursor lands on an entry of an
     /// unshared leaf, that entry has not been compared yet, and the cursors
     /// must stop there so the caller can compare it.
-    pub(crate) fn advance_skipping_shared<'b>(&mut self, other: &mut Cursor<'b, K, V, P>) {
+    pub(crate) fn advance_skipping_shared<'b>(&mut self, other: &mut Cursor<'b, K, V, P, N>) {
         // The current implementation is not optimal as it will still visit
         // the boundary nodes of shared subtrees before skipping them. But it
         // requires very little additional code, and still improves
