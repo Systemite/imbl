@@ -18,15 +18,16 @@ impl<
         K: Ord + Clone + Arbitrary + Sync,
         V: Clone + Arbitrary + Sync,
         P: SharedPointerKind + 'static,
-    > Arbitrary for GenericOrdMap<K, V, P>
+        const N: usize,
+    > Arbitrary for GenericOrdMap<K, V, P, N>
 {
     fn arbitrary(g: &mut Gen) -> Self {
         GenericOrdMap::from_iter(Vec::<(K, V)>::arbitrary(g))
     }
 }
 
-impl<A: Ord + Clone + Arbitrary + Sync, P: SharedPointerKind + 'static> Arbitrary
-    for GenericOrdSet<A, P>
+impl<A: Ord + Clone + Arbitrary + Sync, P: SharedPointerKind + 'static, const N: usize> Arbitrary
+    for GenericOrdSet<A, P, N>
 {
     fn arbitrary(g: &mut Gen) -> Self {
         GenericOrdSet::from_iter(Vec::<A>::arbitrary(g))

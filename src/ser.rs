@@ -104,8 +104,8 @@ where
 
 // Set
 
-impl<'de, A: Deserialize<'de> + Ord + Clone, P: SharedPointerKind> Deserialize<'de>
-    for GenericOrdSet<A, P>
+impl<'de, A: Deserialize<'de> + Ord + Clone, P: SharedPointerKind, const N: usize> Deserialize<'de>
+    for GenericOrdSet<A, P, N>
 {
     fn deserialize<D>(des: D) -> Result<Self, D::Error>
     where
@@ -115,7 +115,9 @@ impl<'de, A: Deserialize<'de> + Ord + Clone, P: SharedPointerKind> Deserialize<'
     }
 }
 
-impl<A: Ord + Serialize, P: SharedPointerKind> Serialize for GenericOrdSet<A, P> {
+impl<A: Ord + Serialize, P: SharedPointerKind, const N: usize> Serialize
+    for GenericOrdSet<A, P, N>
+{
     fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -130,18 +132,25 @@ impl<A: Ord + Serialize, P: SharedPointerKind> Serialize for GenericOrdSet<A, P>
 
 // Map
 
-impl<'de, K: Deserialize<'de> + Ord + Clone, V: Deserialize<'de> + Clone, P: SharedPointerKind>
-    Deserialize<'de> for GenericOrdMap<K, V, P>
+impl<
+        'de,
+        K: Deserialize<'de> + Ord + Clone,
+        V: Deserialize<'de> + Clone,
+        P: SharedPointerKind,
+        const N: usize,
+    > Deserialize<'de> for GenericOrdMap<K, V, P, N>
 {
     fn deserialize<D>(des: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        des.deserialize_map(MapVisitor::<'de, GenericOrdMap<K, V, P>, K, V>::new())
+        des.deserialize_map(MapVisitor::<'de, GenericOrdMap<K, V, P, N>, K, V>::new())
     }
 }
 
-impl<K: Serialize + Ord, V: Serialize, P: SharedPointerKind> Serialize for GenericOrdMap<K, V, P> {
+impl<K: Serialize + Ord, V: Serialize, P: SharedPointerKind, const N: usize> Serialize
+    for GenericOrdMap<K, V, P, N>
+{
     fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
