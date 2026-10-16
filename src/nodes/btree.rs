@@ -12,13 +12,14 @@ use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Comparable;
 use imbl_sized_chunks::Chunk;
 
+use super::btree_children::ChildBuffer;
+
 pub(crate) use crate::config::ORD_CHUNK_SIZE as DEFAULT_NODE_SIZE;
 
 /// Size parameters derived from the node size `N` of a B+Tree.
 ///
-/// A leaf holds at most `N` entries and a branch holds at most `N` children
-/// (and therefore at most `N - 1` keys). Stable Rust cannot use `N + 1` as an
-/// array length, which is why branches are bounded by children rather than keys.
+/// A leaf holds at most `N` entries and a branch holds at most `N` keys
+/// and `N + 1` children. ChildBuffer provides the extra slot on stable Rust.
 pub(crate) struct NodeSize<const N: usize>;
 
 impl<const N: usize> NodeSize<N> {
@@ -28,7 +29,7 @@ impl<const N: usize> NodeSize<N> {
         N >= 4 && N % 2 == 0,
         "the node size of an OrdMap/OrdSet must be an even number of at least 4"
     );
-    const BRANCH_KEYS: usize = N - 1;
+    const BRANCH_KEYS: usize = N;
     const MEDIAN: usize = N / 2;
     const THIRD: usize = N / 3;
 }
@@ -48,6 +49,7 @@ impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, P: SharedPointerKind, const N
 {
     #[cfg(any(test, fuzzing))]
     pub(crate) fn check_sane(&self, is_root: bool) -> usize {
+        assert!(self.keys.len() <= N);
         // Branches report underflow below MEDIAN, but their parent only merges or
         // rebalances them once they drop below THIRD, so THIRD is the real lower bound.
         assert!(self.keys.len() >= if is_root { 1 } else { NodeSize::<N>::THIRD });
@@ -77,6 +79,7 @@ impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, P: SharedPointerKind, const N
 impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, const N: usize> Leaf<K, V, N> {
     #[cfg(any(test, fuzzing))]
     pub(crate) fn check_sane(&self, is_root: bool) -> usize {
+        assert!(self.keys.len() <= N);
         assert!(self.keys.windows(2).all(|w| w[0].0 < w[1].0));
         assert!(self.keys.len() >= if is_root { 0 } else { NodeSize::<N>::THIRD });
         self.keys.len()
@@ -126,7 +129,7 @@ impl<K, V, P: SharedPointerKind, const N: usize> Node<K, V, P, N> {
 /// * all children have level = level - 1 (or level is 1 and all children are leaves)
 /// * all keys in the subtree at children[i] are between keys[i - 1] (if i > 0) and keys[i] (if i < keys.len()).
 /// * root branch must have at least 1 key, whereas non-root branches must have at least THIRD keys
-/// * a branch has at most N children, and therefore at most N - 1 keys
+/// * a branch has at most N keys and N + 1 children
 #[derive(Debug)]
 pub(crate) struct Branch<K, V, P: SharedPointerKind, const N: usize> {
     keys: Chunk<K, N>,
@@ -137,11 +140,11 @@ pub(crate) struct Branch<K, V, P: SharedPointerKind, const N: usize> {
 pub(crate) enum Children<K, V, P: SharedPointerKind, const N: usize> {
     /// implicitly level 1
     Leaves {
-        leaves: Chunk<SharedPointer<Leaf<K, V, N>, P>, N>,
+        leaves: ChildBuffer<SharedPointer<Leaf<K, V, N>, P>, N>,
     },
     /// level >= 2
     Branches {
-        branches: Chunk<SharedPointer<Branch<K, V, P, N>, P>, N>,
+        branches: ChildBuffer<SharedPointer<Branch<K, V, P, N>, P>, N>,
         /// The level of the tree node that contains these children.
         ///
         /// Leaves have level zero, so branches have level at least one. Since this is the
@@ -410,7 +413,7 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V
     ///
     /// Assumes that the two children can fit in a single leaf, panicking if not.
     fn merge_leaves(
-        children: &mut Chunk<SharedPointer<Leaf<K, V, N>, P>, N>,
+        children: &mut ChildBuffer<SharedPointer<Leaf<K, V, N>, P>, N>,
         keys: &mut Chunk<K, N>,
         left_idx: usize,
         keep_left: bool,
@@ -435,7 +438,7 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V
     /// Rebalances two adjacent leaves so that they have the same
     /// number of keys (or differ by at most 1).
     fn rebalance_leaves(
-        children: &mut Chunk<SharedPointer<Leaf<K, V, N>, P>, N>,
+        children: &mut ChildBuffer<SharedPointer<Leaf<K, V, N>, P>, N>,
         keys: &mut Chunk<K, N>,
         left_idx: usize,
     ) {
@@ -464,7 +467,7 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V
     /// (or differ by at most 1). The separator key is rotated between the two branches.
     /// to keep the invariants of the parent branch.
     fn rebalance_branches(
-        children: &mut Chunk<SharedPointer<Branch<K, V, P, N>, P>, N>,
+        children: &mut ChildBuffer<SharedPointer<Branch<K, V, P, N>, P>, N>,
         keys: &mut Chunk<K, N>,
         left_idx: usize,
     ) {
@@ -504,7 +507,7 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V
     ///
     /// Assumes that the two children can fit in a single branch, panicking if not.
     fn merge_branches(
-        children: &mut Chunk<SharedPointer<Branch<K, V, P, N>, P>, N>,
+        children: &mut ChildBuffer<SharedPointer<Branch<K, V, P, N>, P>, N>,
         keys: &mut Chunk<K, N>,
         left_idx: usize,
         keep_left: bool,
@@ -594,8 +597,8 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V
         new_key: K,
         new_node: Node<K, V, P, N>,
     ) -> InsertAction<K, V, P, N> {
-        // A full branch has N - 1 keys, so after inserting the new key the left half
-        // gets MEDIAN keys, the right half MEDIAN - 1, and one becomes the separator.
+        // A full branch has N keys. After insertion, each half gets MEDIAN
+        // keys and one key becomes the separator.
         let median = NodeSize::<N>::MEDIAN;
         let split_idx = median + (i > median) as usize;
         let mut right_keys = self.keys.split_off(split_idx);
@@ -614,7 +617,7 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Branch<K, V
             }
             self.keys.pop_back()
         };
-        debug_assert_eq!(self.keys.len(), right_keys.len() + 1);
+        debug_assert_eq!(self.keys.len(), right_keys.len());
         debug_assert_eq!(self.keys.len() + 1, self.children.len());
         debug_assert_eq!(right_keys.len() + 1, right_children.len());
         InsertAction::Split(
@@ -694,10 +697,10 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind, const N: usize> Node<K, V, 
             children: match (left, right) {
                 (Node::Branch(left), Node::Branch(right)) => Children::Branches {
                     level: NonZeroUsize::new(left.level() + 1).unwrap(),
-                    branches: Chunk::from_iter([left, right]),
+                    branches: ChildBuffer::from_iter([left, right]),
                 },
                 (Node::Leaf(left), Node::Leaf(right)) => Children::Leaves {
-                    leaves: Chunk::from_iter([left, right]),
+                    leaves: ChildBuffer::from_iter([left, right]),
                 },
                 _ => panic!("mismatched split"),
             },

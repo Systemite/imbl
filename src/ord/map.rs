@@ -87,7 +87,8 @@ pub type OrdMap<K, V> = GenericOrdMap<K, V, DefaultSharedPtr>;
 /// # Node size
 ///
 /// The const parameter `N` sets the node size of the B+ tree: a leaf holds at
-/// most `N` entries and a branch at most `N` children. It defaults to 16.
+/// most `N` entries and a branch at most `N` keys and `N + 1` children.
+/// It defaults to 16.
 /// Larger nodes make lookups, iteration and set operations such as
 /// [`intersection`][GenericOrdMap::intersection] faster, because the tree is
 /// shallower. Smaller nodes make persistent updates cheaper, because each
@@ -3086,6 +3087,53 @@ mod test {
             check_node_size::<64>(ops);
             check_node_size::<128>(ops);
         }
+    }
+
+    #[test]
+    fn custom_node_sizes_deep_splits_and_merges() {
+        use rand::{rngs::SmallRng, seq::SliceRandom, SeedableRng};
+
+        fn check<const N: usize>() {
+            // Enough leaves to split internal branches even at N = 128.
+            let mut keys: Vec<_> = (0..(N * N * 4) as u32).collect();
+            keys.shuffle(&mut SmallRng::seed_from_u64(42));
+            let original: GenericOrdMap<_, _, DefaultSharedPtr, N> =
+                keys.iter().map(|&key| (key, key)).collect();
+            original.check_sane();
+
+            for ordered in [false, true] {
+                let mut map = original.clone();
+                let mut expected: BTreeMap<_, _> = keys.iter().map(|&key| (key, key)).collect();
+                if ordered {
+                    // Alternate between both ends to exercise both merge directions.
+                    let len = keys.len() as u32;
+                    keys = (0..len / 2).flat_map(|key| [key, len - 1 - key]).collect();
+                }
+                for (i, key) in keys.iter().enumerate() {
+                    assert_eq!(map.remove(key), expected.remove(key));
+                    if i % 1024 == 0 {
+                        map.check_sane();
+                        assert!(map.iter().eq(expected.iter()));
+                        assert!(map.iter().rev().eq(expected.iter().rev()));
+                    }
+                }
+                assert!(map.is_empty());
+                map.check_sane();
+                // Mutating a fork must leave every shared child intact.
+                original.check_sane();
+                assert_eq!(original.len(), N * N * 4);
+                assert!(original
+                    .iter()
+                    .enumerate()
+                    .all(|(i, (&k, &v))| k == i as u32 && v == k));
+            }
+        }
+
+        check::<4>();
+        check::<6>();
+        check::<16>();
+        check::<64>();
+        check::<128>();
     }
 
     #[test]
