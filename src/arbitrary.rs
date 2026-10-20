@@ -33,7 +33,8 @@ impl<
         K: Arbitrary<'a> + Ord + Clone,
         V: Arbitrary<'a> + Clone,
         P: SharedPointerKind + 'static,
-    > Arbitrary<'a> for GenericOrdMap<K, V, P>
+        const N: usize,
+    > Arbitrary<'a> for GenericOrdMap<K, V, P, N>
 {
     fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
         u.arbitrary_iter()?.collect()
@@ -50,8 +51,8 @@ impl<
     }
 }
 
-impl<'a, A: Arbitrary<'a> + Ord + Clone, P: SharedPointerKind + 'static> Arbitrary<'a>
-    for GenericOrdSet<A, P>
+impl<'a, A: Arbitrary<'a> + Ord + Clone, P: SharedPointerKind + 'static, const N: usize>
+    Arbitrary<'a> for GenericOrdSet<A, P, N>
 {
     fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
         u.arbitrary_iter()?.collect()
