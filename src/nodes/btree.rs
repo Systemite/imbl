@@ -31,7 +31,9 @@ pub(crate) enum Node<K, V, P: SharedPointerKind> {
 impl<K: Ord + std::fmt::Debug, V: std::fmt::Debug, P: SharedPointerKind> Branch<K, V, P> {
     #[cfg(any(test, fuzzing))]
     pub(crate) fn check_sane(&self, is_root: bool) -> usize {
-        assert!(self.keys.len() >= if is_root { 1 } else { MEDIAN - 1 });
+        // A parent only merges or rebalances a child branch once it has fewer than THIRD
+        // keys, so a non-root branch can be as small as THIRD.
+        assert!(self.keys.len() >= if is_root { 1 } else { THIRD });
         assert_eq!(self.keys.len() + 1, self.children.len());
         assert!(self.keys.windows(2).all(|w| w[0] < w[1]));
         match &self.children {
@@ -103,7 +105,7 @@ impl<K, V, P: SharedPointerKind> Node<K, V, P> {
 /// * keys.len() + 1 == children.len()
 /// * all children have level = level - 1 (or level is 1 and all children are leaves)
 /// * all keys in the subtree at children[i] are between keys[i - 1] (if i > 0) and keys[i] (if i < keys.len()).
-/// * root branch must have at least 1 key, whereas non-root branches must have at least MEDIAN - 1 keys
+/// * root branch must have at least 1 key, whereas non-root branches must have at least THIRD keys
 #[derive(Debug)]
 pub(crate) struct Branch<K, V, P: SharedPointerKind> {
     keys: Chunk<K, NODE_SIZE>,

@@ -2991,4 +2991,23 @@ mod test {
             }
         }
     }
+
+    #[test]
+    fn check_sane_after_many_removes() {
+        use rand::{rngs::SmallRng, seq::SliceRandom, SeedableRng};
+
+        // Removing most keys makes the tree rebalance its branches. Check that every
+        // intermediate tree meets the invariants that check_sane asserts.
+        let mut keys: Vec<u32> = (0..4096).collect();
+        keys.shuffle(&mut SmallRng::seed_from_u64(42));
+        let mut map: OrdMap<u32, u32> = keys.iter().map(|&k| (k, k)).collect();
+        keys.shuffle(&mut SmallRng::seed_from_u64(7));
+        for (i, key) in keys.iter().enumerate() {
+            assert_eq!(map.remove(key), Some(*key));
+            if i % 16 == 0 {
+                map.check_sane();
+            }
+        }
+        assert!(map.is_empty());
+    }
 }
