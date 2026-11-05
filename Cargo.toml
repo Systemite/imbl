@@ -66,6 +66,7 @@ static_assertions = "1.1.0"
 criterion = "0.7"
 rpds = { version = "1.1.0" }
 half = "2.6"
+gungraun = "0.20.0"
 
 # Include debug symbols when benchmarking, this is useful for profiling
 [profile.bench]
@@ -84,4 +85,8 @@ harness = false
 
 [[bench]]
 name = "vector"
+harness = false
+
+[[bench]]
+name = "ordmap_gungraun"
 harness = false
