@@ -85,3 +85,7 @@ harness = false
 [[bench]]
 name = "vector"
 harness = false
+
+[[bench]]
+name = "ord_node_capacity"
+harness = false

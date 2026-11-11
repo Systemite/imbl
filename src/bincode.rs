@@ -18,7 +18,9 @@ use crate::vector::GenericVector;
 
 // Set
 
-impl<C, A: Decode<C> + Ord + Clone, P: SharedPointerKind> Decode<C> for GenericOrdSet<A, P> {
+impl<C, A: Decode<C> + Ord + Clone, P: SharedPointerKind, const N: usize> Decode<C>
+    for GenericOrdSet<A, P, N>
+{
     fn decode<D: Decoder<Context = C>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let mut output = Self::new();
         let length: usize = Decode::decode(decoder)?;
@@ -31,7 +33,7 @@ impl<C, A: Decode<C> + Ord + Clone, P: SharedPointerKind> Decode<C> for GenericO
     }
 }
 
-impl<A: Ord + Encode, P: SharedPointerKind> Encode for GenericOrdSet<A, P> {
+impl<A: Ord + Encode, P: SharedPointerKind, const N: usize> Encode for GenericOrdSet<A, P, N> {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
         Encode::encode(&self.len(), encoder)?;
         for item in self.iter() {
@@ -43,8 +45,8 @@ impl<A: Ord + Encode, P: SharedPointerKind> Encode for GenericOrdSet<A, P> {
 
 // Map
 
-impl<C, K: Decode<C> + Ord + Clone, V: Decode<C> + Clone, P: SharedPointerKind> Decode<C>
-    for GenericOrdMap<K, V, P>
+impl<C, K: Decode<C> + Ord + Clone, V: Decode<C> + Clone, P: SharedPointerKind, const N: usize>
+    Decode<C> for GenericOrdMap<K, V, P, N>
 {
     fn decode<D: Decoder<Context = C>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let len: usize = Decode::decode(decoder)?;
@@ -58,8 +60,8 @@ impl<C, K: Decode<C> + Ord + Clone, V: Decode<C> + Clone, P: SharedPointerKind> 
     }
 }
 
-impl<K: Encode + Ord + Clone, V: Encode + Clone, P: SharedPointerKind> Encode
-    for GenericOrdMap<K, V, P>
+impl<K: Encode + Ord + Clone, V: Encode + Clone, P: SharedPointerKind, const N: usize> Encode
+    for GenericOrdMap<K, V, P, N>
 {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
         Encode::encode(&self.len(), encoder)?;

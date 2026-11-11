@@ -1012,26 +1012,26 @@ where
     }
 }
 
-impl<A, S, P1, P2> From<GenericOrdSet<A, P2>> for GenericHashSet<A, S, P1>
+impl<A, S, P1, P2, const N: usize> From<GenericOrdSet<A, P2, N>> for GenericHashSet<A, S, P1>
 where
     A: Ord + Hash + Eq + Clone,
     S: BuildHasher + Default + Clone,
     P1: SharedPointerKind,
     P2: SharedPointerKind,
 {
-    fn from(ordset: GenericOrdSet<A, P2>) -> Self {
+    fn from(ordset: GenericOrdSet<A, P2, N>) -> Self {
         ordset.into_iter().collect()
     }
 }
 
-impl<A, S, P1, P2> From<&GenericOrdSet<A, P2>> for GenericHashSet<A, S, P1>
+impl<A, S, P1, P2, const N: usize> From<&GenericOrdSet<A, P2, N>> for GenericHashSet<A, S, P1>
 where
     A: Ord + Hash + Eq + Clone,
     S: BuildHasher + Default + Clone,
     P1: SharedPointerKind,
     P2: SharedPointerKind,
 {
-    fn from(ordset: &GenericOrdSet<A, P2>) -> Self {
+    fn from(ordset: &GenericOrdSet<A, P2, N>) -> Self {
         ordset.into_iter().cloned().collect()
     }
 }

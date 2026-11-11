@@ -3,6 +3,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 pub(crate) mod btree;
+mod btree_children;
 pub(crate) mod hamt;
 pub(crate) mod rrb;
 

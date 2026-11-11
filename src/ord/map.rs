@@ -31,7 +31,8 @@ use equivalent::Comparable;
 
 use crate::hashmap::GenericHashMap;
 use crate::nodes::btree::{
-    ConsumingIter as NodeConsumingIter, Cursor, InsertAction, Iter as NodeIter, Node,
+    ConsumingIter as NodeConsumingIter, Cursor, InsertAction, Iter as NodeIter, Node, NodeSize,
+    DEFAULT_NODE_SIZE,
 };
 use crate::shared_ptr::DefaultSharedPtr;
 
@@ -83,19 +84,51 @@ pub type OrdMap<K, V> = GenericOrdMap<K, V, DefaultSharedPtr>;
 /// ordered, so that keys always come out from lowest to highest,
 /// where a [`HashMap`][hashmap::HashMap] has no guaranteed ordering.
 ///
+/// # Node size
+///
+/// The const parameter `N` sets the node size of the B+ tree: a leaf holds at
+/// most `N` entries and a branch at most `N` keys and `N + 1` children.
+/// It defaults to 16.
+/// Larger nodes make lookups, iteration and set operations such as
+/// [`intersection`][GenericOrdMap::intersection] faster, because the tree is
+/// shallower. Smaller nodes make persistent updates cheaper, because each
+/// update copies fewer entries. `N` must be an even number of at least 4;
+/// other values fail to compile.
+///
+/// [`OrdMap`] always uses the default node size. Name the full type to pick
+/// another one:
+///
+/// ```
+/// # use imbl::GenericOrdMap;
+/// # use imbl::shared_ptr::DefaultSharedPtr;
+/// type SmallNodeMap<K, V> = GenericOrdMap<K, V, DefaultSharedPtr, 16>;
+///
+/// let mut map = SmallNodeMap::new();
+/// map.insert(1, "one");
+/// assert_eq!(map.get(&1), Some(&"one"));
+/// ```
+///
+/// ```compile_fail
+/// # use imbl::GenericOrdMap;
+/// # use imbl::shared_ptr::DefaultSharedPtr;
+/// // An odd node size is rejected at compile time.
+/// let map: GenericOrdMap<i32, i32, DefaultSharedPtr, 7> = GenericOrdMap::new();
+/// ```
+///
 /// [1]: https://en.wikipedia.org/wiki/B%2B_tree
 /// [hashmap::HashMap]: ../hashmap/type.HashMap.html
 /// [std::cmp::Ord]: https://doc.rust-lang.org/std/cmp/trait.Ord.html
-pub struct GenericOrdMap<K, V, P: SharedPointerKind> {
+pub struct GenericOrdMap<K, V, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
     size: usize,
-    root: Option<Node<K, V, P>>,
+    root: Option<Node<K, V, P, N>>,
 }
 
-impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> GenericOrdMap<K, V, P, N> {
     /// Construct an empty map.
     #[inline]
     #[must_use]
     pub fn new() -> Self {
+        let () = NodeSize::<N>::VALID;
         GenericOrdMap {
             size: 0,
             root: None,
@@ -206,7 +239,7 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
     }
 }
 
-impl<K, V, P> GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> GenericOrdMap<K, V, P, N>
 where
     K: Ord,
     P: SharedPointerKind,
@@ -255,7 +288,7 @@ where
 
     /// Get an iterator over the key/value pairs of a map.
     #[must_use]
-    pub fn iter(&self) -> Iter<'_, K, V, P> {
+    pub fn iter(&self) -> Iter<'_, K, V, P, N> {
         Iter {
             it: NodeIter::new::<_, K>(self.root.as_ref(), self.size, ..),
         }
@@ -263,7 +296,7 @@ where
 
     /// Create an iterator over a range of key/value pairs.
     #[must_use]
-    pub fn range<R, Q>(&self, range: R) -> RangedIter<'_, K, V, P>
+    pub fn range<R, Q>(&self, range: R) -> RangedIter<'_, K, V, P, N>
     where
         R: RangeBounds<Q>,
         Q: Comparable<K> + ?Sized,
@@ -275,13 +308,13 @@ where
 
     /// Get an iterator over a map's keys.
     #[must_use]
-    pub fn keys(&self) -> Keys<'_, K, V, P> {
+    pub fn keys(&self) -> Keys<'_, K, V, P, N> {
         Keys { it: self.iter() }
     }
 
     /// Get an iterator over a map's values.
     #[must_use]
-    pub fn values(&self) -> Values<'_, K, V, P> {
+    pub fn values(&self) -> Values<'_, K, V, P, N> {
         Values { it: self.iter() }
     }
 
@@ -295,7 +328,7 @@ where
     ///
     /// Time: O(n) where n is the size of the larger map.
     #[must_use]
-    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, K, V, P> {
+    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, K, V, P, N> {
         let mut diff = DiffIter {
             it1: Cursor::empty(),
             it2: Cursor::empty(),
@@ -447,7 +480,7 @@ where
     pub fn is_submap_by<B, RM, F, P2>(&self, other: RM, mut cmp: F) -> bool
     where
         F: FnMut(&V, &B) -> bool,
-        RM: Borrow<GenericOrdMap<K, B, P2>>,
+        RM: Borrow<GenericOrdMap<K, B, P2, N>>,
         P2: SharedPointerKind,
     {
         self.iter()
@@ -466,7 +499,7 @@ where
     pub fn is_proper_submap_by<B, RM, F, P2>(&self, other: RM, cmp: F) -> bool
     where
         F: FnMut(&V, &B) -> bool,
-        RM: Borrow<GenericOrdMap<K, B, P2>>,
+        RM: Borrow<GenericOrdMap<K, B, P2, N>>,
         P2: SharedPointerKind,
     {
         self.len() != other.borrow().len() && self.is_submap_by(other, cmp)
@@ -542,7 +575,7 @@ where
     }
 }
 
-impl<K, V, P> GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone,
     V: Clone,
@@ -1296,9 +1329,9 @@ where
     #[must_use]
     pub fn intersection_with<B, C, F, P2, P3>(
         self,
-        other: GenericOrdMap<K, B, P2>,
+        other: GenericOrdMap<K, B, P2, N>,
         mut f: F,
-    ) -> GenericOrdMap<K, C, P3>
+    ) -> GenericOrdMap<K, C, P3, N>
     where
         B: Clone,
         C: Clone,
@@ -1331,9 +1364,9 @@ where
     #[must_use]
     pub fn intersection_with_key<B, C, F, P2, P3>(
         mut self,
-        other: GenericOrdMap<K, B, P2>,
+        other: GenericOrdMap<K, B, P2, N>,
         mut f: F,
-    ) -> GenericOrdMap<K, C, P3>
+    ) -> GenericOrdMap<K, C, P3, N>
     where
         B: Clone,
         C: Clone,
@@ -1341,7 +1374,7 @@ where
         P2: SharedPointerKind,
         P3: SharedPointerKind,
     {
-        let mut out = GenericOrdMap::<K, C, P3>::default();
+        let mut out = GenericOrdMap::<K, C, P3, N>::default();
         for (key, right_value) in other {
             match self.remove(&key) {
                 None => (),
@@ -1457,7 +1490,7 @@ where
     ///
     /// [Entry]: enum.Entry.html
     #[must_use]
-    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, P> {
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, P, N> {
         if self.contains_key(&key) {
             Entry::Occupied(OccupiedEntry { map: self, key })
         } else {
@@ -1469,19 +1502,19 @@ where
 // Entries
 
 /// A handle for a key and its associated value.
-pub enum Entry<'a, K, V, P>
+pub enum Entry<'a, K, V, P, const N: usize = DEFAULT_NODE_SIZE>
 where
     K: Ord + Clone,
     V: Clone,
     P: SharedPointerKind,
 {
     /// An entry which exists in the map.
-    Occupied(OccupiedEntry<'a, K, V, P>),
+    Occupied(OccupiedEntry<'a, K, V, P, N>),
     /// An entry which doesn't exist in the map.
-    Vacant(VacantEntry<'a, K, V, P>),
+    Vacant(VacantEntry<'a, K, V, P, N>),
 }
 
-impl<'a, K, V, P> Entry<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> Entry<'a, K, V, P, N>
 where
     K: Ord + Clone,
     V: Clone,
@@ -1541,17 +1574,17 @@ where
 }
 
 /// An entry for a mapping that already exists in the map.
-pub struct OccupiedEntry<'a, K, V, P>
+pub struct OccupiedEntry<'a, K, V, P, const N: usize = DEFAULT_NODE_SIZE>
 where
     K: Ord + Clone,
     V: Clone,
     P: SharedPointerKind,
 {
-    map: &'a mut GenericOrdMap<K, V, P>,
+    map: &'a mut GenericOrdMap<K, V, P, N>,
     key: K,
 }
 
-impl<'a, K, V, P> OccupiedEntry<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> OccupiedEntry<'a, K, V, P, N>
 where
     K: 'a + Ord + Clone,
     V: 'a + Clone,
@@ -1600,17 +1633,17 @@ where
 }
 
 /// An entry for a mapping that does not already exist in the map.
-pub struct VacantEntry<'a, K, V, P>
+pub struct VacantEntry<'a, K, V, P, const N: usize = DEFAULT_NODE_SIZE>
 where
     K: Ord + Clone,
     V: Clone,
     P: SharedPointerKind,
 {
-    map: &'a mut GenericOrdMap<K, V, P>,
+    map: &'a mut GenericOrdMap<K, V, P, N>,
     key: K,
 }
 
-impl<'a, K, V, P> VacantEntry<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> VacantEntry<'a, K, V, P, N>
 where
     K: 'a + Ord + Clone,
     V: 'a + Clone,
@@ -1638,7 +1671,7 @@ where
 
 // Core traits
 
-impl<K, V, P: SharedPointerKind> Clone for GenericOrdMap<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> Clone for GenericOrdMap<K, V, P, N> {
     /// Clone a map.
     ///
     /// Time: O(1)
@@ -1652,32 +1685,32 @@ impl<K, V, P: SharedPointerKind> Clone for GenericOrdMap<K, V, P> {
 }
 
 // TODO: Support PartialEq for OrdMap that have different P
-impl<K, V, P> PartialEq for GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> PartialEq for GenericOrdMap<K, V, P, N>
 where
     K: Ord + PartialEq,
     V: PartialEq,
     P: SharedPointerKind,
 {
-    fn eq(&self, other: &GenericOrdMap<K, V, P>) -> bool {
+    fn eq(&self, other: &GenericOrdMap<K, V, P, N>) -> bool {
         self.len() == other.len() && self.diff(other).next().is_none()
     }
 }
 
-impl<K: Ord + Eq, V: Eq, P: SharedPointerKind> Eq for GenericOrdMap<K, V, P> {}
+impl<K: Ord + Eq, V: Eq, P: SharedPointerKind, const N: usize> Eq for GenericOrdMap<K, V, P, N> {}
 
 // TODO: Support PartialOrd for OrdMap that have different P
-impl<K, V, P> PartialOrd for GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> PartialOrd for GenericOrdMap<K, V, P, N>
 where
     K: Ord,
     V: PartialOrd,
     P: SharedPointerKind,
 {
-    fn partial_cmp(&self, other: &GenericOrdMap<K, V, P>) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &GenericOrdMap<K, V, P, N>) -> Option<Ordering> {
         self.iter().partial_cmp(other.iter())
     }
 }
 
-impl<K, V, P> Ord for GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> Ord for GenericOrdMap<K, V, P, N>
 where
     K: Ord,
     V: Ord,
@@ -1688,7 +1721,7 @@ where
     }
 }
 
-impl<K, V, P> Hash for GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> Hash for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Hash,
     V: Hash,
@@ -1704,39 +1737,39 @@ where
     }
 }
 
-impl<K, V, P: SharedPointerKind> Default for GenericOrdMap<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> Default for GenericOrdMap<K, V, P, N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, V, P> Add for &GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> Add for &GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone,
     V: Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericOrdMap<K, V, P>;
+    type Output = GenericOrdMap<K, V, P, N>;
 
     fn add(self, other: Self) -> Self::Output {
         self.clone().union(other.clone())
     }
 }
 
-impl<K, V, P> Add for GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> Add for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone,
     V: Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericOrdMap<K, V, P>;
+    type Output = GenericOrdMap<K, V, P, N>;
 
     fn add(self, other: Self) -> Self::Output {
         self.union(other)
     }
 }
 
-impl<K, V, P> Sum for GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> Sum for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone,
     V: Clone,
@@ -1750,7 +1783,7 @@ where
     }
 }
 
-impl<K, V, RK, RV, P> Extend<(RK, RV)> for GenericOrdMap<K, V, P>
+impl<K, V, RK, RV, P, const N: usize> Extend<(RK, RV)> for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone + From<RK>,
     V: Clone + From<RV>,
@@ -1766,7 +1799,7 @@ where
     }
 }
 
-impl<Q, K, V, P: SharedPointerKind> Index<&Q> for GenericOrdMap<K, V, P>
+impl<Q, K, V, P: SharedPointerKind, const N: usize> Index<&Q> for GenericOrdMap<K, V, P, N>
 where
     Q: Comparable<K> + ?Sized,
     K: Ord,
@@ -1781,7 +1814,7 @@ where
     }
 }
 
-impl<Q, K, V, P> IndexMut<&Q> for GenericOrdMap<K, V, P>
+impl<Q, K, V, P, const N: usize> IndexMut<&Q> for GenericOrdMap<K, V, P, N>
 where
     Q: Comparable<K> + ?Sized,
     K: Ord + Clone,
@@ -1796,7 +1829,7 @@ where
     }
 }
 
-impl<K, V, P> Debug for GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> Debug for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Debug,
     V: Debug,
@@ -1814,12 +1847,12 @@ where
 // Iterators
 
 /// An iterator over the key/value pairs of a map.
-pub struct Iter<'a, K, V, P: SharedPointerKind> {
-    it: NodeIter<'a, K, V, P>,
+pub struct Iter<'a, K, V, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it: NodeIter<'a, K, V, P, N>,
 }
 
 // We impl Clone instead of deriving it, because we want Clone even if K and V aren't.
-impl<'a, K, V, P: SharedPointerKind> Clone for Iter<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, const N: usize> Clone for Iter<'a, K, V, P, N> {
     fn clone(&self) -> Self {
         Iter {
             it: self.it.clone(),
@@ -1827,7 +1860,7 @@ impl<'a, K, V, P: SharedPointerKind> Clone for Iter<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P> Iterator for Iter<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> Iterator for Iter<'a, K, V, P, N>
 where
     P: SharedPointerKind,
 {
@@ -1844,7 +1877,7 @@ where
     }
 }
 
-impl<'a, K, V, P> DoubleEndedIterator for Iter<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> DoubleEndedIterator for Iter<'a, K, V, P, N>
 where
     P: SharedPointerKind,
 {
@@ -1853,17 +1886,20 @@ where
     }
 }
 
-impl<'a, K, V, P> ExactSizeIterator for Iter<'a, K, V, P> where P: SharedPointerKind {}
-impl<'a, K, V, P> FusedIterator for Iter<'a, K, V, P> where P: SharedPointerKind {}
+impl<'a, K, V, P, const N: usize> ExactSizeIterator for Iter<'a, K, V, P, N> where
+    P: SharedPointerKind
+{
+}
+impl<'a, K, V, P, const N: usize> FusedIterator for Iter<'a, K, V, P, N> where P: SharedPointerKind {}
 
 /// An iterator over a range of key/value pairs in a map.
 #[derive(Debug)]
-pub struct RangedIter<'a, K, V, P: SharedPointerKind> {
-    it: NodeIter<'a, K, V, P>,
+pub struct RangedIter<'a, K, V, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it: NodeIter<'a, K, V, P, N>,
 }
 
 // We impl Clone instead of deriving it, because we want Clone even if K and V aren't.
-impl<'a, K, V, P: SharedPointerKind> Clone for RangedIter<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, const N: usize> Clone for RangedIter<'a, K, V, P, N> {
     fn clone(&self) -> Self {
         RangedIter {
             it: self.it.clone(),
@@ -1871,7 +1907,7 @@ impl<'a, K, V, P: SharedPointerKind> Clone for RangedIter<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P> Iterator for RangedIter<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> Iterator for RangedIter<'a, K, V, P, N>
 where
     P: SharedPointerKind,
 {
@@ -1886,7 +1922,7 @@ where
     }
 }
 
-impl<'a, K, V, P> DoubleEndedIterator for RangedIter<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> DoubleEndedIterator for RangedIter<'a, K, V, P, N>
 where
     P: SharedPointerKind,
 {
@@ -1894,12 +1930,15 @@ where
         self.it.next_back()
     }
 }
-impl<'a, K, V, P> FusedIterator for RangedIter<'a, K, V, P> where P: SharedPointerKind {}
+impl<'a, K, V, P, const N: usize> FusedIterator for RangedIter<'a, K, V, P, N> where
+    P: SharedPointerKind
+{
+}
 
 /// An iterator over the differences between two maps.
-pub struct DiffIter<'a, 'b, K, V, P: SharedPointerKind> {
-    it1: Cursor<'a, K, V, P>,
-    it2: Cursor<'b, K, V, P>,
+pub struct DiffIter<'a, 'b, K, V, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it1: Cursor<'a, K, V, P, N>,
+    it2: Cursor<'b, K, V, P, N>,
 }
 
 /// A description of a difference between two ordered maps.
@@ -1918,7 +1957,7 @@ pub enum DiffItem<'a, 'b, K, V> {
     Remove(&'a K, &'a V),
 }
 
-impl<'a, 'b, K, V, P> Iterator for DiffIter<'a, 'b, K, V, P>
+impl<'a, 'b, K, V, P, const N: usize> Iterator for DiffIter<'a, 'b, K, V, P, N>
 where
     K: Ord,
     V: PartialEq,
@@ -1963,7 +2002,7 @@ where
     }
 }
 
-impl<'a, 'b, K, V, P> FusedIterator for DiffIter<'a, 'b, K, V, P>
+impl<'a, 'b, K, V, P, const N: usize> FusedIterator for DiffIter<'a, 'b, K, V, P, N>
 where
     K: Ord,
     V: PartialEq,
@@ -1972,11 +2011,11 @@ where
 }
 
 /// An iterator ove the keys of a map.
-pub struct Keys<'a, K, V, P: SharedPointerKind> {
-    it: Iter<'a, K, V, P>,
+pub struct Keys<'a, K, V, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it: Iter<'a, K, V, P, N>,
 }
 
-impl<'a, K, V, P> Iterator for Keys<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> Iterator for Keys<'a, K, V, P, N>
 where
     K: 'a + Ord,
     V: 'a,
@@ -1993,7 +2032,7 @@ where
     }
 }
 
-impl<'a, K, V, P> DoubleEndedIterator for Keys<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> DoubleEndedIterator for Keys<'a, K, V, P, N>
 where
     K: 'a + Ord,
     V: 'a,
@@ -2007,7 +2046,7 @@ where
     }
 }
 
-impl<'a, K, V, P> ExactSizeIterator for Keys<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> ExactSizeIterator for Keys<'a, K, V, P, N>
 where
     K: 'a + Ord,
     V: 'a,
@@ -2015,7 +2054,7 @@ where
 {
 }
 
-impl<'a, K, V, P> FusedIterator for Keys<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> FusedIterator for Keys<'a, K, V, P, N>
 where
     K: 'a + Ord,
     V: 'a,
@@ -2024,11 +2063,11 @@ where
 }
 
 /// An iterator over the values of a map.
-pub struct Values<'a, K, V, P: SharedPointerKind> {
-    it: Iter<'a, K, V, P>,
+pub struct Values<'a, K, V, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it: Iter<'a, K, V, P, N>,
 }
 
-impl<'a, K, V, P> Iterator for Values<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> Iterator for Values<'a, K, V, P, N>
 where
     K: 'a + Ord,
     V: 'a,
@@ -2045,7 +2084,7 @@ where
     }
 }
 
-impl<'a, K, V, P> DoubleEndedIterator for Values<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> DoubleEndedIterator for Values<'a, K, V, P, N>
 where
     K: 'a + Ord,
     V: 'a,
@@ -2059,7 +2098,7 @@ where
     }
 }
 
-impl<'a, K, V, P> FusedIterator for Values<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> FusedIterator for Values<'a, K, V, P, N>
 where
     K: 'a + Ord,
     V: 'a,
@@ -2067,7 +2106,7 @@ where
 {
 }
 
-impl<'a, K, V, P> ExactSizeIterator for Values<'a, K, V, P>
+impl<'a, K, V, P, const N: usize> ExactSizeIterator for Values<'a, K, V, P, N>
 where
     K: 'a + Ord,
     V: 'a,
@@ -2075,7 +2114,7 @@ where
 {
 }
 
-impl<K, V, RK, RV, P> FromIterator<(RK, RV)> for GenericOrdMap<K, V, P>
+impl<K, V, RK, RV, P, const N: usize> FromIterator<(RK, RV)> for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone + From<RK>,
     V: Clone + From<RV>,
@@ -2093,27 +2132,27 @@ where
     }
 }
 
-impl<'a, K, V, P> IntoIterator for &'a GenericOrdMap<K, V, P>
+impl<'a, K, V, P, const N: usize> IntoIterator for &'a GenericOrdMap<K, V, P, N>
 where
     K: Ord,
     P: SharedPointerKind,
 {
     type Item = (&'a K, &'a V);
-    type IntoIter = Iter<'a, K, V, P>;
+    type IntoIter = Iter<'a, K, V, P, N>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
 }
 
-impl<K, V, P> IntoIterator for GenericOrdMap<K, V, P>
+impl<K, V, P, const N: usize> IntoIterator for GenericOrdMap<K, V, P, N>
 where
     K: Clone,
     V: Clone,
     P: SharedPointerKind,
 {
     type Item = (K, V);
-    type IntoIter = ConsumingIter<K, V, P>;
+    type IntoIter = ConsumingIter<K, V, P, N>;
 
     fn into_iter(self) -> Self::IntoIter {
         ConsumingIter {
@@ -2123,11 +2162,11 @@ where
 }
 
 /// A consuming iterator over the elements of a map.
-pub struct ConsumingIter<K, V, P: SharedPointerKind> {
-    it: NodeConsumingIter<K, V, P>,
+pub struct ConsumingIter<K, V, P: SharedPointerKind, const N: usize = DEFAULT_NODE_SIZE> {
+    it: NodeConsumingIter<K, V, P, N>,
 }
 
-impl<K, V, P: SharedPointerKind> Clone for ConsumingIter<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> Clone for ConsumingIter<K, V, P, N> {
     fn clone(&self) -> Self {
         Self {
             it: self.it.clone(),
@@ -2135,7 +2174,7 @@ impl<K, V, P: SharedPointerKind> Clone for ConsumingIter<K, V, P> {
     }
 }
 
-impl<K, V, P> Iterator for ConsumingIter<K, V, P>
+impl<K, V, P, const N: usize> Iterator for ConsumingIter<K, V, P, N>
 where
     K: Clone,
     V: Clone,
@@ -2150,20 +2189,22 @@ where
     }
 }
 
-impl<K: Clone, V: Clone, P: SharedPointerKind> DoubleEndedIterator for ConsumingIter<K, V, P> {
+impl<K: Clone, V: Clone, P: SharedPointerKind, const N: usize> DoubleEndedIterator
+    for ConsumingIter<K, V, P, N>
+{
     fn next_back(&mut self) -> Option<Self::Item> {
         self.it.next_back()
     }
 }
 
-impl<K, V, P> ExactSizeIterator for ConsumingIter<K, V, P>
+impl<K, V, P, const N: usize> ExactSizeIterator for ConsumingIter<K, V, P, N>
 where
     K: Clone,
     V: Clone,
     P: SharedPointerKind,
 {
 }
-impl<K, V, P> FusedIterator for ConsumingIter<K, V, P>
+impl<K, V, P, const N: usize> FusedIterator for ConsumingIter<K, V, P, N>
 where
     K: Clone,
     V: Clone,
@@ -2173,13 +2214,16 @@ where
 
 // Conversions
 
-impl<K, V, P: SharedPointerKind> AsRef<GenericOrdMap<K, V, P>> for GenericOrdMap<K, V, P> {
+impl<K, V, P: SharedPointerKind, const N: usize> AsRef<GenericOrdMap<K, V, P, N>>
+    for GenericOrdMap<K, V, P, N>
+{
     fn as_ref(&self) -> &Self {
         self
     }
 }
 
-impl<K, V, OK, OV, P1, P2> From<&GenericOrdMap<&K, &V, P2>> for GenericOrdMap<OK, OV, P1>
+impl<K, V, OK, OV, P1, P2, const N: usize> From<&GenericOrdMap<&K, &V, P2, N>>
+    for GenericOrdMap<OK, OV, P1, N>
 where
     K: Ord + ToOwned<Owned = OK> + ?Sized,
     V: ToOwned<Owned = OV> + ?Sized,
@@ -2188,14 +2232,14 @@ where
     P1: SharedPointerKind,
     P2: SharedPointerKind,
 {
-    fn from(m: &GenericOrdMap<&K, &V, P2>) -> Self {
+    fn from(m: &GenericOrdMap<&K, &V, P2, N>) -> Self {
         m.iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
     }
 }
 
-impl<'a, K, V, RK, RV, OK, OV, P> From<&'a [(RK, RV)]> for GenericOrdMap<K, V, P>
+impl<'a, K, V, RK, RV, OK, OV, P, const N: usize> From<&'a [(RK, RV)]> for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone + From<OK>,
     V: Clone + From<OV>,
@@ -2204,25 +2248,26 @@ where
     RV: ToOwned<Owned = OV>,
     P: SharedPointerKind,
 {
-    fn from(m: &'a [(RK, RV)]) -> GenericOrdMap<K, V, P> {
+    fn from(m: &'a [(RK, RV)]) -> GenericOrdMap<K, V, P, N> {
         m.iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect()
     }
 }
 
-impl<K, V, RK, RV, P> From<Vec<(RK, RV)>> for GenericOrdMap<K, V, P>
+impl<K, V, RK, RV, P, const N: usize> From<Vec<(RK, RV)>> for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone + From<RK>,
     V: Clone + From<RV>,
     P: SharedPointerKind,
 {
-    fn from(m: Vec<(RK, RV)>) -> GenericOrdMap<K, V, P> {
+    fn from(m: Vec<(RK, RV)>) -> GenericOrdMap<K, V, P, N> {
         m.into_iter().collect()
     }
 }
 
-impl<'a, K, V, RK, RV, OK, OV, P> From<&'a Vec<(RK, RV)>> for GenericOrdMap<K, V, P>
+impl<'a, K, V, RK, RV, OK, OV, P, const N: usize> From<&'a Vec<(RK, RV)>>
+    for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone + From<OK>,
     V: Clone + From<OV>,
@@ -2231,26 +2276,28 @@ where
     RV: ToOwned<Owned = OV>,
     P: SharedPointerKind,
 {
-    fn from(m: &'a Vec<(RK, RV)>) -> GenericOrdMap<K, V, P> {
+    fn from(m: &'a Vec<(RK, RV)>) -> GenericOrdMap<K, V, P, N> {
         m.iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect()
     }
 }
 
-impl<K, V, RK, RV, P> From<collections::HashMap<RK, RV>> for GenericOrdMap<K, V, P>
+impl<K, V, RK, RV, P, const N: usize> From<collections::HashMap<RK, RV>>
+    for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone + From<RK>,
     V: Clone + From<RV>,
     P: SharedPointerKind,
     RK: Eq + Hash,
 {
-    fn from(m: collections::HashMap<RK, RV>) -> GenericOrdMap<K, V, P> {
+    fn from(m: collections::HashMap<RK, RV>) -> GenericOrdMap<K, V, P, N> {
         m.into_iter().collect()
     }
 }
 
-impl<'a, K, V, OK, OV, RK, RV, P> From<&'a collections::HashMap<RK, RV>> for GenericOrdMap<K, V, P>
+impl<'a, K, V, OK, OV, RK, RV, P, const N: usize> From<&'a collections::HashMap<RK, RV>>
+    for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone + From<OK>,
     V: Clone + From<OV>,
@@ -2259,25 +2306,27 @@ where
     RV: ToOwned<Owned = OV>,
     P: SharedPointerKind,
 {
-    fn from(m: &'a collections::HashMap<RK, RV>) -> GenericOrdMap<K, V, P> {
+    fn from(m: &'a collections::HashMap<RK, RV>) -> GenericOrdMap<K, V, P, N> {
         m.iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect()
     }
 }
 
-impl<K, V, RK, RV, P> From<collections::BTreeMap<RK, RV>> for GenericOrdMap<K, V, P>
+impl<K, V, RK, RV, P, const N: usize> From<collections::BTreeMap<RK, RV>>
+    for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone + From<RK>,
     V: Clone + From<RV>,
     P: SharedPointerKind,
 {
-    fn from(m: collections::BTreeMap<RK, RV>) -> GenericOrdMap<K, V, P> {
+    fn from(m: collections::BTreeMap<RK, RV>) -> GenericOrdMap<K, V, P, N> {
         m.into_iter().collect()
     }
 }
 
-impl<'a, K, V, RK, RV, OK, OV, P> From<&'a collections::BTreeMap<RK, RV>> for GenericOrdMap<K, V, P>
+impl<'a, K, V, RK, RV, OK, OV, P, const N: usize> From<&'a collections::BTreeMap<RK, RV>>
+    for GenericOrdMap<K, V, P, N>
 where
     K: Ord + Clone + From<OK>,
     V: Clone + From<OV>,
@@ -2286,14 +2335,15 @@ where
     RV: ToOwned<Owned = OV>,
     P: SharedPointerKind,
 {
-    fn from(m: &'a collections::BTreeMap<RK, RV>) -> GenericOrdMap<K, V, P> {
+    fn from(m: &'a collections::BTreeMap<RK, RV>) -> GenericOrdMap<K, V, P, N> {
         m.iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect()
     }
 }
 
-impl<K, V, S, P1, P2> From<GenericHashMap<K, V, S, P2>> for GenericOrdMap<K, V, P1>
+impl<K, V, S, P1, P2, const N: usize> From<GenericHashMap<K, V, S, P2>>
+    for GenericOrdMap<K, V, P1, N>
 where
     K: Ord + Hash + Eq + Clone,
     V: Clone,
@@ -2306,7 +2356,8 @@ where
     }
 }
 
-impl<'a, K, V, S, P1, P2> From<&'a GenericHashMap<K, V, S, P2>> for GenericOrdMap<K, V, P1>
+impl<'a, K, V, S, P1, P2, const N: usize> From<&'a GenericHashMap<K, V, S, P2>>
+    for GenericOrdMap<K, V, P1, N>
 where
     K: Ord + Hash + Eq + Clone,
     V: Clone,
@@ -2337,6 +2388,7 @@ mod test {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::ordset::GenericOrdSet;
     use crate::proptest::*;
     #[rustfmt::skip]
     use ::proptest::num::{i16, usize};
@@ -2594,7 +2646,7 @@ mod test {
 
     #[test]
     fn range_iter_big() {
-        use crate::nodes::btree::NODE_SIZE;
+        use crate::nodes::btree::DEFAULT_NODE_SIZE as NODE_SIZE;
         use std::ops::Bound::Included;
         const N: usize = NODE_SIZE * NODE_SIZE * NODE_SIZE / 2; // enough for a sizeable 3 level tree
 
@@ -2685,9 +2737,9 @@ mod test {
         }
     }
 
-    fn expected_diff<'a, K, V, P>(
-        a: &'a GenericOrdMap<K, V, P>,
-        b: &'a GenericOrdMap<K, V, P>,
+    fn expected_diff<'a, K, V, P, const N: usize>(
+        a: &'a GenericOrdMap<K, V, P, N>,
+        b: &'a GenericOrdMap<K, V, P, N>,
     ) -> Vec<DiffItem<'a, 'a, K, V>>
     where
         K: Ord + Clone,
@@ -2990,6 +3042,107 @@ mod test {
                 assert_eq!(v, map1.get(k).or_else(|| map2.get(k)).unwrap());
             }
         }
+    }
+
+    /// Random inserts and removes against a `BTreeMap`, checking tree invariants
+    /// after every operation, for a map with node size `N`.
+    fn check_node_size<const N: usize>(ops: &[(bool, u16)]) {
+        let mut map: GenericOrdMap<u16, u16, DefaultSharedPtr, N> = GenericOrdMap::new();
+        let mut expected = BTreeMap::new();
+        for (i, &(insert, key)) in ops.iter().enumerate() {
+            if insert {
+                assert_eq!(map.insert(key, key), expected.insert(key, key));
+            } else {
+                assert_eq!(map.remove(&key), expected.remove(&key));
+            }
+            if i % 64 == 0 {
+                map.check_sane();
+            }
+        }
+        map.check_sane();
+        // Delete-heavy phase, to exercise merging and rebalancing of branches.
+        for (i, &(_, key)) in ops.iter().enumerate() {
+            assert_eq!(map.remove(&key), expected.remove(&key));
+            if i % 16 == 0 {
+                map.check_sane();
+            }
+        }
+        assert!(map.is_empty());
+        map.check_sane();
+        for &(_, key) in ops {
+            map.insert(key, key);
+            expected.insert(key, key);
+        }
+        assert!(map.iter().map(|(k, v)| (*k, *v)).eq(expected.into_iter()));
+        assert_eq!(map.iter().rev().count(), map.len());
+    }
+
+    proptest! {
+        #![proptest_config(::proptest::test_runner::Config::with_cases(32))]
+        #[test]
+        fn custom_node_sizes(ref ops in collection::vec((bool::ANY, 0u16..2000), 0..5000)) {
+            check_node_size::<4>(ops);
+            check_node_size::<6>(ops);
+            check_node_size::<16>(ops);
+            check_node_size::<64>(ops);
+            check_node_size::<128>(ops);
+        }
+    }
+
+    #[test]
+    fn custom_node_sizes_deep_splits_and_merges() {
+        use rand::{rngs::SmallRng, seq::SliceRandom, SeedableRng};
+
+        fn check<const N: usize>() {
+            // Enough leaves to split internal branches even at N = 128.
+            let mut keys: Vec<_> = (0..(N * N * 4) as u32).collect();
+            keys.shuffle(&mut SmallRng::seed_from_u64(42));
+            let original: GenericOrdMap<_, _, DefaultSharedPtr, N> =
+                keys.iter().map(|&key| (key, key)).collect();
+            original.check_sane();
+
+            for ordered in [false, true] {
+                let mut map = original.clone();
+                let mut expected: BTreeMap<_, _> = keys.iter().map(|&key| (key, key)).collect();
+                if ordered {
+                    // Alternate between both ends to exercise both merge directions.
+                    let len = keys.len() as u32;
+                    keys = (0..len / 2).flat_map(|key| [key, len - 1 - key]).collect();
+                }
+                for (i, key) in keys.iter().enumerate() {
+                    assert_eq!(map.remove(key), expected.remove(key));
+                    if i % 1024 == 0 {
+                        map.check_sane();
+                        assert!(map.iter().eq(expected.iter()));
+                        assert!(map.iter().rev().eq(expected.iter().rev()));
+                    }
+                }
+                assert!(map.is_empty());
+                map.check_sane();
+                // Mutating a fork must leave every shared child intact.
+                original.check_sane();
+                assert_eq!(original.len(), N * N * 4);
+                assert!(original
+                    .iter()
+                    .enumerate()
+                    .all(|(i, (&k, &v))| k == i as u32 && v == k));
+            }
+        }
+
+        check::<4>();
+        check::<6>();
+        check::<16>();
+        check::<64>();
+        check::<128>();
+    }
+
+    #[test]
+    fn custom_node_size_set() {
+        let set: GenericOrdSet<i32, DefaultSharedPtr, 8> = (0..10_000).collect();
+        set.check_sane();
+        let evens: GenericOrdSet<i32, DefaultSharedPtr, 8> = (0..10_000).step_by(2).collect();
+        assert_eq!(set.clone().intersection(evens.clone()), evens);
+        assert_eq!(set.relative_complement(evens).len(), 5_000);
     }
 
     #[test]
